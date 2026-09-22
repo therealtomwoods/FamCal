@@ -43,7 +43,8 @@ const USER_KEY = 'famcal_user_profile';
 const SCOPES_KEY = 'famcal_granted_scopes';
 
 let tokenClientInstance: TokenClient | null = null;
-let onTokenReceivedCallback: ((token: string) => void) | null = null;
+let onTokenReceivedCallback: ((token: string, profile?: UserProfile) => void) | null = null;
+let onProfileReceivedCallback: ((profile: UserProfile) => void) | null = null;
 
 // Full scopes for Calendar, Photos (Picker API + legacy), Smart Device Management (Nest), and Profile
 export const GOOGLE_SCOPES = [
@@ -75,12 +76,24 @@ export function getStoredGrantedScopes(): string {
 
 export function getStoredUserProfile(): UserProfile | null {
   const stored = localStorage.getItem(USER_KEY);
-  if (!stored) return null;
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return null;
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      // ignore
+    }
   }
+
+  // If token is valid, provide baseline profile so UI stays connected
+  if (getStoredAccessToken()) {
+    return {
+      name: 'Google Account',
+      email: 'Connected',
+      grantedScopes: getStoredGrantedScopes(),
+    };
+  }
+
+  return null;
 }
 
 export function clearStoredSession(): void {
@@ -92,7 +105,8 @@ export function clearStoredSession(): void {
 
 export function initializeGoogleAuth(
   clientId: string,
-  onSuccess?: (token: string) => void
+  onSuccess?: (token: string, profile?: UserProfile) => void,
+  onProfile?: (profile: UserProfile) => void
 ): boolean {
   if (!window.google?.accounts?.oauth2) {
     console.warn('Google Identity Services script not yet loaded.');
@@ -101,6 +115,10 @@ export function initializeGoogleAuth(
 
   if (!clientId || clientId.trim() === '') {
     return false;
+  }
+
+  if (onProfile) {
+    onProfileReceivedCallback = onProfile;
   }
 
   try {
@@ -121,15 +139,29 @@ export function initializeGoogleAuth(
             localStorage.setItem(SCOPES_KEY, tokenResponse.scope);
           }
 
-          // Fetch basic profile info
-          fetchUserProfile(tokenResponse.access_token, tokenResponse.scope);
+          // Immediately construct and save a baseline profile so user status is instantly updated
+          const baselineProfile: UserProfile = {
+            name: 'Google Account',
+            email: 'Connected',
+            grantedScopes: tokenResponse.scope,
+          };
+          localStorage.setItem(USER_KEY, JSON.stringify(baselineProfile));
 
           if (onTokenReceivedCallback) {
-            onTokenReceivedCallback(tokenResponse.access_token);
+            onTokenReceivedCallback(tokenResponse.access_token, baselineProfile);
           }
           if (onSuccess) {
-            onSuccess(tokenResponse.access_token);
+            onSuccess(tokenResponse.access_token, baselineProfile);
           }
+
+          // Fetch full user profile asynchronously and update
+          fetchUserProfile(tokenResponse.access_token, tokenResponse.scope).then((fullProfile) => {
+            if (fullProfile) {
+              if (onProfileReceivedCallback) {
+                onProfileReceivedCallback(fullProfile);
+              }
+            }
+          });
         }
       },
       error_callback: (err) => {
@@ -143,16 +175,20 @@ export function initializeGoogleAuth(
   }
 }
 
-export function triggerGoogleSignIn(clientId: string, onToken?: (token: string) => void): void {
-  // Clear any existing expired / partial token so a fresh full-scope token is acquired
-  clearStoredSession();
-
+export function triggerGoogleSignIn(
+  clientId: string,
+  onToken?: (token: string, profile?: UserProfile) => void,
+  onProfile?: (profile: UserProfile) => void
+): void {
   if (onToken) {
     onTokenReceivedCallback = onToken;
   }
+  if (onProfile) {
+    onProfileReceivedCallback = onProfile;
+  }
 
   // Re-create tokenClient to ensure latest GOOGLE_SCOPES are requested
-  initializeGoogleAuth(clientId, onToken);
+  initializeGoogleAuth(clientId, onToken, onProfile);
 
   if (!tokenClientInstance) {
     alert('Google Identity script is initializing. Please wait 2 seconds and try again.');

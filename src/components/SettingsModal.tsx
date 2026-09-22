@@ -24,6 +24,7 @@ interface SettingsModalProps {
   onClose: () => void;
   settings: AppSettings;
   onUpdateSettings: (newSettings: Partial<AppSettings>) => void;
+  userToken?: string | null;
   userProfile: UserProfile | null;
   onConnectGoogle: () => void;
   onDisconnectGoogle: () => void;
@@ -32,6 +33,8 @@ interface SettingsModalProps {
   onRefreshAlbums: () => void;
   onOpenAlbumModal: () => void;
   onLaunchPhotosPicker?: () => void;
+  onCheckPickerNow?: () => void;
+  onCancelPicker?: () => void;
   isLaunchingPicker?: boolean;
   pickedPhotosCount?: number;
   nestStatus?: { success: boolean; message: string };
@@ -43,6 +46,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   settings,
   onUpdateSettings,
+  userToken,
   userProfile,
   onConnectGoogle,
   onDisconnectGoogle,
@@ -51,6 +55,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRefreshAlbums,
   onOpenAlbumModal,
   onLaunchPhotosPicker,
+  onCheckPickerNow,
+  onCancelPicker,
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
   nestStatus,
@@ -174,11 +180,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               {/* User Account Status & Re-auth */}
-              {userProfile ? (
+              {Boolean(userToken || userProfile) ? (
                 <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      {userProfile.picture ? (
+                      {userProfile?.picture ? (
                         <img
                           src={userProfile.picture}
                           alt={userProfile.name}
@@ -186,12 +192,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         />
                       ) : (
                         <div className="w-10 h-10 rounded-full bg-emerald-600/30 flex items-center justify-center text-emerald-300 font-bold">
-                          {userProfile.name[0]}
+                          {userProfile?.name?.[0] || 'G'}
                         </div>
                       )}
                       <div>
-                        <p className="font-bold text-white">{userProfile.name}</p>
-                        <p className="text-xs text-emerald-300">{userProfile.email}</p>
+                        <p className="font-bold text-white">{userProfile?.name || 'Google Account'}</p>
+                        <p className="text-xs text-emerald-300">{userProfile?.email || 'Connected'}</p>
                       </div>
                     </div>
                     <button
@@ -205,7 +211,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   {/* Re-authenticate button to refresh token with newly enabled scopes */}
                   <div className="pt-2 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs text-slate-300">Enabled new scopes or APIs?</span>
+                    <span className="text-xs text-slate-300">Need to update permissions?</span>
                     <button
                       onClick={onConnectGoogle}
                       className="px-3 py-1 rounded-lg bg-blue-600/40 hover:bg-blue-600 border border-blue-400/40 text-blue-200 text-xs font-semibold transition flex items-center gap-1.5"
@@ -258,27 +264,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </span>
                     )}
                   </div>
-                  <button
-                    onClick={onLaunchPhotosPicker}
-                    disabled={isLaunchingPicker || !userProfile}
-                    className={`w-full py-2 px-3 rounded-lg font-bold text-xs transition flex items-center justify-center gap-2 ${
-                      userProfile
-                        ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-md shadow-pink-600/20'
-                        : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5'
-                    }`}
-                  >
-                    {isLaunchingPicker ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Opening Google Photos Selection...</span>
-                      </>
-                    ) : (
-                      <>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        <span>Select Photos from Google Photos</span>
-                      </>
-                    )}
-                  </button>
+
+                  {isLaunchingPicker ? (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center gap-2 text-xs text-amber-200 bg-amber-950/50 p-2 rounded-lg border border-amber-500/30">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400 flex-shrink-0" />
+                        <span>Google Photos is open. Choose photos and click <strong>"Done"</strong> in Google.</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={onCheckPickerNow}
+                          className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Check for Photos Now</span>
+                        </button>
+                        <button
+                          onClick={onCancelPicker}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition border border-white/10"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={onLaunchPhotosPicker}
+                      disabled={!Boolean(userToken || userProfile)}
+                      className={`w-full py-2 px-3 rounded-lg font-bold text-xs transition flex items-center justify-center gap-2 ${
+                        Boolean(userToken || userProfile)
+                          ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-md shadow-pink-600/20'
+                          : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5'
+                      }`}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Select Photos from Google Photos</span>
+                    </button>
+                  )}
                 </div>
 
                 {photosStatus && (

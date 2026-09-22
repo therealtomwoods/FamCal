@@ -31,6 +31,8 @@ import {
   fetchUserPhotoAlbums,
   fetchAlbumPhotos,
   launchGooglePhotosPicker,
+  checkActivePickerNow,
+  cancelActivePickerSession,
   getStoredPickedPhotos,
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
@@ -355,17 +357,61 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleCheckPickerNow = async () => {
+    setPhotosStatus({ success: true, message: 'Checking Google Photos selection...' });
+    try {
+      const result = await checkActivePickerNow();
+      if (result.success && result.photos.length > 0) {
+        setPhotos(result.photos);
+        updateSettings({
+          selectedAlbumId: 'PICKED_GOOGLE_PHOTOS',
+          selectedAlbumName: `📸 Selected Google Photos (${result.photos.length})`,
+        });
+        setPhotosStatus({
+          success: true,
+          message: `✓ Active: ${result.photos.length} photos selected from Google Photos`,
+        });
+        setIsLaunchingPicker(false);
+        handleRefreshAlbums();
+      } else {
+        setPhotosStatus({
+          success: false,
+          message: result.error || 'Google Photos has not received your selection yet.',
+        });
+      }
+    } catch (err: any) {
+      setPhotosStatus({
+        success: false,
+        message: err?.message || 'Check failed',
+      });
+    }
+  };
+
+  const handleCancelPicker = async () => {
+    await cancelActivePickerSession();
+    setIsLaunchingPicker(false);
+    setPhotosStatus(undefined);
+  };
+
   // Handle Google Auth Connect
   const handleConnectGoogle = () => {
     if (!settings.googleClientId) {
       alert('Please enter your Google OAuth Client ID first in Settings.');
       return;
     }
-    triggerGoogleSignIn(settings.googleClientId, (token) => {
-      setUserToken(token);
-      setUserProfile(getStoredUserProfile());
-      updateSettings({ isDemoMode: false });
-    });
+    triggerGoogleSignIn(
+      settings.googleClientId,
+      (token, baselineProfile) => {
+        setUserToken(token);
+        if (baselineProfile) {
+          setUserProfile(baselineProfile);
+        }
+        updateSettings({ isDemoMode: false });
+      },
+      (fullProfile) => {
+        setUserProfile(fullProfile);
+      }
+    );
   };
 
   const handleDisconnectGoogle = () => {
@@ -502,6 +548,8 @@ export const App: React.FC = () => {
         photosError={photosStatus && !photosStatus.success ? photosStatus.message : undefined}
         isGoogleConnected={!!userToken}
         onLaunchPhotosPicker={handleLaunchPhotosPicker}
+        onCheckPickerNow={handleCheckPickerNow}
+        onCancelPicker={handleCancelPicker}
         isLaunchingPicker={isLaunchingPicker}
         pickedPhotosCount={photos.length}
       />
@@ -511,6 +559,7 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}
+        userToken={userToken}
         userProfile={userProfile}
         onConnectGoogle={handleConnectGoogle}
         onDisconnectGoogle={handleDisconnectGoogle}
@@ -519,6 +568,8 @@ export const App: React.FC = () => {
         onRefreshAlbums={handleRefreshAlbums}
         onOpenAlbumModal={() => setIsAlbumSelectOpen(true)}
         onLaunchPhotosPicker={handleLaunchPhotosPicker}
+        onCheckPickerNow={handleCheckPickerNow}
+        onCancelPicker={handleCancelPicker}
         isLaunchingPicker={isLaunchingPicker}
         pickedPhotosCount={photos.length}
         nestStatus={nestStatus}

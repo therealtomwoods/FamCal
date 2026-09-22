@@ -65,6 +65,13 @@ interface GPhotosMediaSearchResponse {
   }>;
 }
 
+// Active Picker Session reference for manual check/cancel triggers
+let currentActiveSession: { id: string; token: string } | null = null;
+
+export function getActivePickerSession(): { id: string; token: string } | null {
+  return currentActiveSession;
+}
+
 /**
  * Retrieve cached picked photos from localStorage
  */
@@ -95,6 +102,21 @@ export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
  */
 export function clearStoredPickedPhotos(): void {
   localStorage.removeItem(PICKED_PHOTOS_KEY);
+}
+
+/**
+ * Format picker URL with /autoclose path without breaking existing query parameters
+ */
+function getAutoclosePickerUri(rawUri: string): string {
+  try {
+    const url = new URL(rawUri);
+    if (!url.pathname.endsWith('/autoclose')) {
+      url.pathname = url.pathname.replace(/\/+$/, '') + '/autoclose';
+    }
+    return url.toString();
+  } catch {
+    return rawUri.endsWith('/') ? `${rawUri}autoclose` : `${rawUri}/autoclose`;
+  }
 }
 
 /**
@@ -133,19 +155,43 @@ export async function createGooglePhotosPickerSession(token: string): Promise<Pi
  * GET https://photospicker.googleapis.com/v1/sessions/{sessionId}
  */
 export async function checkPickerSessionStatus(token: string, sessionId: string): Promise<boolean> {
-  const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
-  const res = await fetch(`https://photospicker.googleapis.com/v1/sessions/${cleanId}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+  try {
+    const res = await fetch(`https://photospicker.googleapis.com/v1/${sessionPath}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-  if (!res.ok) {
+    if (!res.ok) {
+      return false;
+    }
+
+    const data = await res.json();
+    return Boolean(data.mediaItemsSet);
+  } catch {
     return false;
   }
+}
 
-  const data = await res.json();
-  return Boolean(data.mediaItemsSet);
+function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): PhotoItem[] {
+  return items
+    .filter((item) => item.mediaFile?.baseUrl || (item as any).baseUrl)
+    .map((item) => {
+      const baseUrl = item.mediaFile?.baseUrl || (item as any).baseUrl;
+      const filename = item.mediaFile?.filename || (item as any).filename || 'Family Photo';
+      const width = item.mediaFile?.mediaFileMetadata?.width || (item as any).width;
+      const height = item.mediaFile?.mediaFileMetadata?.height || (item as any).height;
+      return {
+        id: item.id,
+        url: `${baseUrl}=w1600-h1200`,
+        baseUrl: baseUrl,
+        filename: filename,
+        caption: filename,
+        width: typeof width === 'number' ? width : undefined,
+        height: typeof height === 'number' ? height : undefined,
+      };
+    });
 }
 
 /**
@@ -153,47 +199,50 @@ export async function checkPickerSessionStatus(token: string, sessionId: string)
  * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}
  */
 export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
-  const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
-  const res = await fetch(`https://photospicker.googleapis.com/v1/mediaItems?sessionId=${cleanId}&pageSize=100`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
 
-  if (!res.ok) {
+  const res = await fetch(
+    `https://photospicker.googleapis.com/v1/mediaItems?sessionId=${encodeURIComponent(sessionPath)}&pageSize=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  if (res.ok) {
+    const data: { mediaItems?: PickerMediaItem[] } = await res.json();
+    return mapPickerItems(data.mediaItems || []);
+  }
+
+  // Fallback without sessions/ prefix in case parameter requires raw ID
+  const rawId = sessionId.replace(/^sessions\//, '');
+  const fallbackRes = await fetch(
+    `https://photospicker.googleapis.com/v1/mediaItems?sessionId=${encodeURIComponent(rawId)}&pageSize=100`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  if (!fallbackRes.ok) {
     const errText = await res.text();
     throw new Error(`Failed to retrieve selected photos: ${errText}`);
   }
 
-  const data: { mediaItems?: PickerMediaItem[] } = await res.json();
-  if (!data.mediaItems || data.mediaItems.length === 0) {
-    return [];
-  }
-
-  return data.mediaItems
-    .filter((item) => item.mediaFile?.baseUrl)
-    .map((item) => {
-      const baseUrl = item.mediaFile!.baseUrl;
-      return {
-        id: item.id,
-        url: `${baseUrl}=w1600-h1200`,
-        baseUrl: baseUrl,
-        filename: item.mediaFile?.filename,
-        caption: item.mediaFile?.filename || 'Family Photo',
-        width: item.mediaFile?.mediaFileMetadata?.width,
-        height: item.mediaFile?.mediaFileMetadata?.height,
-      };
-    });
+  const fallbackData: { mediaItems?: PickerMediaItem[] } = await fallbackRes.json();
+  return mapPickerItems(fallbackData.mediaItems || []);
 }
 
 /**
- * 4. Delete Picker Session once photos are obtained
+ * 4. Delete Picker Session once photos are obtained or cancelled
  * DELETE https://photospicker.googleapis.com/v1/sessions/{sessionId}
  */
 export async function deletePickerSession(token: string, sessionId: string): Promise<void> {
   try {
-    const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
-    await fetch(`https://photospicker.googleapis.com/v1/sessions/${cleanId}`, {
+    const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+    await fetch(`https://photospicker.googleapis.com/v1/${sessionPath}`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -205,8 +254,53 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
 }
 
 /**
+ * Manually check active session status immediately (called when user clicks 'Check Photos Now')
+ */
+export async function checkActivePickerNow(): Promise<{ success: boolean; photos: PhotoItem[]; error?: string }> {
+  if (!currentActiveSession) {
+    return { success: false, photos: [], error: 'No active Google Photos selection in progress.' };
+  }
+
+  const { token, id } = currentActiveSession;
+  const isSet = await checkPickerSessionStatus(token, id);
+  if (!isSet) {
+    return {
+      success: false,
+      photos: [],
+      error: 'Google Photos has not received your selection yet. Make sure you select your photos and click "Done" in the Google window.',
+    };
+  }
+
+  try {
+    const photos = await fetchPickerSelectedMediaItems(token, id);
+    await deletePickerSession(token, id);
+    currentActiveSession = null;
+
+    if (photos.length > 0) {
+      saveStoredPickedPhotos(photos);
+      return { success: true, photos };
+    } else {
+      return { success: false, photos: [], error: 'No photos were selected.' };
+    }
+  } catch (err: any) {
+    return { success: false, photos: [], error: err?.message || 'Failed to retrieve photos' };
+  }
+}
+
+/**
+ * Explicitly cancel active picker session
+ */
+export async function cancelActivePickerSession(): Promise<void> {
+  if (currentActiveSession) {
+    await deletePickerSession(currentActiveSession.token, currentActiveSession.id);
+    currentActiveSession = null;
+  }
+}
+
+/**
  * High-Level Orchestrator for the Google Photos Picker Flow
- * Opens picker popup, polls until user confirms selection, retrieves photos, and saves to cache.
+ * Opens picker popup, keeps session alive while user browses photos,
+ * polls until user confirms selection, retrieves photos, and saves to cache.
  */
 export async function launchGooglePhotosPicker(
   token: string,
@@ -217,6 +311,9 @@ export async function launchGooglePhotosPicker(
   }
 
   try {
+    // Cancel any dangling session before starting a fresh one
+    await cancelActivePickerSession();
+
     onStatusUpdate?.('Initializing Google Photos Picker session...');
 
     // 1. Create Picker Session
@@ -225,15 +322,15 @@ export async function launchGooglePhotosPicker(
       throw new Error('Failed to obtain Google Photos Picker URL from Google');
     }
 
+    currentActiveSession = { id: session.id, token };
+
     onStatusUpdate?.('Opening Google Photos selection window...');
 
-    // 2. Open Google Picker in a popup window
-    const pickerUrl = session.pickerUri.includes('?')
-      ? `${session.pickerUri}&autoclose=true`
-      : `${session.pickerUri}/autoclose`;
+    // 2. Open Google Picker with /autoclose in a popup window
+    const pickerUrl = getAutoclosePickerUri(session.pickerUri);
 
-    const popupWidth = 850;
-    const popupHeight = 720;
+    const popupWidth = 880;
+    const popupHeight = 740;
     const left = window.screen.width ? (window.screen.width - popupWidth) / 2 : 100;
     const top = window.screen.height ? (window.screen.height - popupHeight) / 2 : 100;
 
@@ -244,41 +341,40 @@ export async function launchGooglePhotosPicker(
     );
 
     if (!popup) {
-      // Fallback if popup blocker intercepted
       window.open(pickerUrl, '_blank');
     }
 
-    onStatusUpdate?.('Waiting for you to select photos in Google Photos...');
+    onStatusUpdate?.('Please select your photos in Google Photos and click Done.');
 
-    // 3. Poll session until user finishes selecting
-    const maxPollAttempts = 150; // ~5 minutes max
+    // 3. Poll session until user finishes selecting (up to 10 minutes)
+    // NOTE: We DO NOT check popup.closed because Cross-Origin-Opener-Policy
+    // severs cross-origin references and marks popup.closed = true prematurely!
+    const maxPollAttempts = 200; // ~10 minutes
     let pollCount = 0;
     let itemsSet = false;
 
     while (pollCount < maxPollAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 3000));
       pollCount++;
+
+      // Check if session was cancelled externally
+      if (!currentActiveSession || currentActiveSession.id !== session.id) {
+        return { success: false, photos: [], error: 'Photo selection was cancelled.' };
+      }
 
       itemsSet = await checkPickerSessionStatus(token, session.id);
       if (itemsSet) {
-        break;
-      }
-
-      // Check if popup was closed by user
-      if (popup && popup.closed) {
-        // Check one last time in case user clicked done right before close
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        itemsSet = await checkPickerSessionStatus(token, session.id);
         break;
       }
     }
 
     if (!itemsSet) {
       await deletePickerSession(token, session.id);
+      currentActiveSession = null;
       return {
         success: false,
         photos: [],
-        error: 'Photo selection was cancelled or timed out. Please try again.',
+        error: 'Photo selection timed out. Please try again.',
       };
     }
 
@@ -287,12 +383,13 @@ export async function launchGooglePhotosPicker(
     // 4. Fetch the selected photos
     const photos = await fetchPickerSelectedMediaItems(token, session.id);
 
-    // 5. Clean up session
+    // 5. Clean up session only after items are safely fetched
     await deletePickerSession(token, session.id);
+    currentActiveSession = null;
 
     if (photos.length > 0) {
       saveStoredPickedPhotos(photos);
-      onStatusUpdate?.(`Successfully loaded ${photos.length} photos!`);
+      onStatusUpdate?.(`✓ Successfully loaded ${photos.length} photos!`);
       return { success: true, photos };
     } else {
       return {
@@ -303,7 +400,11 @@ export async function launchGooglePhotosPicker(
     }
   } catch (err: any) {
     const errorMsg = err?.message || 'Error running Google Photos Picker';
-    if (errorMsg.includes('Google Photos Picker API has not been used') || errorMsg.includes('disabled') || errorMsg.includes('403')) {
+    if (
+      errorMsg.includes('Google Photos Picker API has not been used') ||
+      errorMsg.includes('disabled') ||
+      errorMsg.includes('403')
+    ) {
       return {
         success: false,
         photos: [],

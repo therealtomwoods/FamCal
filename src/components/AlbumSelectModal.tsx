@@ -21,6 +21,8 @@ interface AlbumSelectModalProps {
   photosError?: string;
   isGoogleConnected?: boolean;
   onLaunchPhotosPicker?: () => void;
+  onCheckPickerNow?: () => void;
+  onCancelPicker?: () => void;
   isLaunchingPicker?: boolean;
   pickedPhotosCount?: number;
 }
@@ -35,6 +37,8 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
   photosError,
   isGoogleConnected = false,
   onLaunchPhotosPicker,
+  onCheckPickerNow,
+  onCancelPicker,
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
 }) => {
@@ -117,29 +121,49 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onLaunchPhotosPicker}
-              disabled={isLaunchingPicker || !isGoogleConnected}
-              className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-xs transition shadow-lg flex items-center justify-center gap-2 ${
-                isGoogleConnected
-                  ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-pink-600/30'
-                  : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5'
-              }`}
-            >
-              {isLaunchingPicker ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                  <span>Waiting for Google Photos Selection...</span>
-                </>
-              ) : (
-                <>
-                  <ExternalLink className="w-4 h-4 text-white" />
-                  <span>Select Photos from Google Photos</span>
-                </>
-              )}
-            </button>
-          </div>
+          {isLaunchingPicker ? (
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center gap-2 text-xs text-amber-200 bg-amber-950/60 p-2.5 rounded-xl border border-amber-500/30">
+                <RefreshCw className="w-4 h-4 animate-spin text-amber-400 flex-shrink-0" />
+                <div className="space-y-0.5">
+                  <p className="font-bold text-white">Google Photos window is open</p>
+                  <p className="text-[11px] text-slate-300">
+                    Choose photos and click <strong>"Done"</strong> in the Google Photos window.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={onCheckPickerNow}
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/30"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Check for Photos Now</span>
+                </button>
+                <button
+                  onClick={onCancelPicker}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition border border-white/10"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onLaunchPhotosPicker}
+                disabled={!isGoogleConnected}
+                className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-xs transition shadow-lg flex items-center justify-center gap-2 ${
+                  isGoogleConnected
+                    ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-pink-600/30'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5'
+                }`}
+              >
+                <ExternalLink className="w-4 h-4 text-white" />
+                <span>Select Photos from Google Photos</span>
+              </button>
+            </div>
+          )}
 
           {!isGoogleConnected && (
             <p className="text-[11px] text-amber-300">
