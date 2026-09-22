@@ -45,6 +45,16 @@ export interface PhotoAlbum {
   mediaItemsCount?: number;
 }
 
+export interface DailyForecast {
+  date: string;
+  dayName: string;
+  tempMax: number;
+  tempMin: number;
+  condition: string;
+  conditionCode: number;
+  icon: string;
+}
+
 export interface WeatherData {
   temp: number;
   condition: string;
@@ -54,6 +64,7 @@ export interface WeatherData {
   humidity: number;
   city: string;
   icon: string;
+  forecast: DailyForecast[];
 }
 
 export interface StockItem {
