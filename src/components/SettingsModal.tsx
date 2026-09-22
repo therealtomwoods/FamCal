@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AppSettings, PhotoAlbum } from '../types';
 import { UserProfile } from '../services/googleAuth';
-import { X, LogIn, LogOut, Sliders, Shield, Cloud, TrendingUp, Thermometer, Clock, HelpCircle, Check } from 'lucide-react';
+import { X, LogIn, LogOut, Sliders, Shield, Cloud, TrendingUp, Thermometer, Clock, Check, Copy, AlertTriangle } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -27,10 +27,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectAlbum,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
-  const [activeTab, setActiveTab] = useState<'general' | 'widgets' | 'google' | 'guide'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'widgets' | 'google' | 'guide'>('google');
   const [showSavedToast, setShowSavedToast] = useState(false);
+  const [copiedOrigin, setCopiedOrigin] = useState(false);
 
   if (!isOpen) return null;
+
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
+
+  const handleCopyOrigin = () => {
+    navigator.clipboard.writeText(currentOrigin);
+    setCopiedOrigin(true);
+    setTimeout(() => setCopiedOrigin(false), 2000);
+  };
 
   const handleSaveClientId = () => {
     onUpdateSettings({ googleClientId: clientIdInput.trim() });
@@ -63,10 +72,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-white/10 bg-slate-950/60 px-3 text-xs font-semibold">
+        <div className="flex border-b border-white/10 bg-slate-950/60 px-3 text-xs font-semibold overflow-x-auto no-scrollbar">
+          <button
+            onClick={() => setActiveTab('google')}
+            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
+              activeTab === 'google'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Google Account & OAuth
+          </button>
           <button
             onClick={() => setActiveTab('general')}
-            className={`py-2.5 px-3 border-b-2 transition ${
+            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
               activeTab === 'general'
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -76,7 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('widgets')}
-            className={`py-2.5 px-3 border-b-2 transition ${
+            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
               activeTab === 'widgets'
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -85,29 +104,138 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             Floating Widgets
           </button>
           <button
-            onClick={() => setActiveTab('google')}
-            className={`py-2.5 px-3 border-b-2 transition ${
-              activeTab === 'google'
-                ? 'border-blue-500 text-blue-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Google Account
-          </button>
-          <button
             onClick={() => setActiveTab('guide')}
-            className={`py-2.5 px-3 border-b-2 transition ${
+            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
               activeTab === 'guide'
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            Setup Guide
+            OAuth Fix Checklist
           </button>
         </div>
 
         {/* Tab Content */}
         <div className="p-4 overflow-y-auto space-y-4 flex-1 text-sm">
+          {activeTab === 'google' && (
+            <div className="space-y-4">
+              {/* Exact Browser Origin Helper */}
+              <div className="p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/30 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-300">Your Current Browser Origin:</span>
+                  <button
+                    onClick={handleCopyOrigin}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-600/30 hover:bg-blue-600/50 border border-blue-400/30 text-[11px] font-semibold text-blue-200 transition"
+                  >
+                    {copiedOrigin ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    {copiedOrigin ? 'Copied!' : 'Copy Origin'}
+                  </button>
+                </div>
+                <code className="block p-2 rounded bg-slate-950 border border-white/10 text-xs font-mono text-emerald-400 select-all">
+                  {currentOrigin}
+                </code>
+                <p className="text-[11px] text-slate-300 leading-normal">
+                  ⚠️ In Google Cloud Console, this exact string must be added under <strong className="text-white">Authorized JavaScript origins</strong> (NOT Redirect URIs, and without a trailing slash).
+                </p>
+              </div>
+
+              {/* Google Client ID Config */}
+              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
+                <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-blue-400" />
+                  Google OAuth Client ID
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={clientIdInput}
+                    onChange={(e) => setClientIdInput(e.target.value)}
+                    placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
+                  />
+                  <button
+                    onClick={handleSaveClientId}
+                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Save
+                  </button>
+                </div>
+                {showSavedToast && (
+                  <p className="text-xs text-emerald-400 font-semibold animate-pulse">
+                    ✓ Client ID saved!
+                  </p>
+                )}
+              </div>
+
+              {/* User Account Card */}
+              {userProfile ? (
+                <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {userProfile.picture ? (
+                      <img
+                        src={userProfile.picture}
+                        alt={userProfile.name}
+                        className="w-10 h-10 rounded-full border border-emerald-400/40"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-emerald-600/30 flex items-center justify-center text-emerald-300 font-bold">
+                        {userProfile.name[0]}
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-bold text-white">{userProfile.name}</p>
+                      <p className="text-xs text-emerald-300">{userProfile.email}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={onDisconnectGoogle}
+                    className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/30 text-rose-200 text-xs font-semibold transition flex items-center gap-1.5"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Disconnect
+                  </button>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-slate-800/60 border border-white/5 text-center space-y-3">
+                  <p className="text-xs text-slate-300">
+                    Connect your Google Account to synchronize your Google Calendars and Google Photos albums.
+                  </p>
+                  <button
+                    onClick={onConnectGoogle}
+                    className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    Sign in with Google
+                  </button>
+                </div>
+              )}
+
+              {/* Photos Album Selector */}
+              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
+                <label className="text-xs font-bold text-white">Google Photos Album</label>
+                <div className="space-y-1.5">
+                  {albums.map((alb) => (
+                    <div
+                      key={alb.id}
+                      onClick={() => onSelectAlbum(alb)}
+                      className={`p-2 rounded-lg border text-xs cursor-pointer flex items-center justify-between ${
+                        alb.id === settings.selectedAlbumId
+                          ? 'bg-blue-950/50 border-blue-500/50 text-white'
+                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="font-semibold">{alb.title}</span>
+                      {alb.id === settings.selectedAlbumId && (
+                        <span className="text-[10px] text-blue-400 font-bold">Selected</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'general' && (
             <div className="space-y-4">
               {/* Demo Mode Toggle */}
@@ -342,143 +470,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           )}
 
-          {activeTab === 'google' && (
-            <div className="space-y-4">
-              {/* Google Client ID Config */}
-              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
-                <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Shield className="w-4 h-4 text-blue-400" />
-                  Google OAuth Client ID
-                </label>
-                <p className="text-xs text-slate-400">
-                  Enter your Web Client ID from Google Cloud Console.
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={clientIdInput}
-                    onChange={(e) => setClientIdInput(e.target.value)}
-                    placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
-                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
-                  />
-                  <button
-                    onClick={handleSaveClientId}
-                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    Save
-                  </button>
-                </div>
-                {showSavedToast && (
-                  <p className="text-xs text-emerald-400 font-semibold animate-pulse">
-                    ✓ Client ID saved!
-                  </p>
-                )}
-              </div>
-
-              {/* User Account Card */}
-              {userProfile ? (
-                <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {userProfile.picture ? (
-                      <img
-                        src={userProfile.picture}
-                        alt={userProfile.name}
-                        className="w-10 h-10 rounded-full border border-emerald-400/40"
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-emerald-600/30 flex items-center justify-center text-emerald-300 font-bold">
-                        {userProfile.name[0]}
-                      </div>
-                    )}
-                    <div>
-                      <p className="font-bold text-white">{userProfile.name}</p>
-                      <p className="text-xs text-emerald-300">{userProfile.email}</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={onDisconnectGoogle}
-                    className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/30 text-rose-200 text-xs font-semibold transition flex items-center gap-1.5"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    Disconnect
-                  </button>
-                </div>
-              ) : (
-                <div className="p-4 rounded-xl bg-slate-800/60 border border-white/5 text-center space-y-3">
-                  <p className="text-xs text-slate-300">
-                    Connect your Google Account to synchronize your Google Calendars and Google Photos albums.
-                  </p>
-                  <button
-                    onClick={onConnectGoogle}
-                    className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2"
-                  >
-                    <LogIn className="w-4 h-4" />
-                    Sign in with Google
-                  </button>
-                </div>
-              )}
-
-              {/* Photos Album Selector */}
-              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
-                <label className="text-xs font-bold text-white">Google Photos Album</label>
-                <div className="space-y-1.5">
-                  {albums.map((alb) => (
-                    <div
-                      key={alb.id}
-                      onClick={() => onSelectAlbum(alb)}
-                      className={`p-2 rounded-lg border text-xs cursor-pointer flex items-center justify-between ${
-                        alb.id === settings.selectedAlbumId
-                          ? 'bg-blue-950/50 border-blue-500/50 text-white'
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'
-                      }`}
-                    >
-                      <span className="font-semibold">{alb.title}</span>
-                      {alb.id === settings.selectedAlbumId && (
-                        <span className="text-[10px] text-blue-400 font-bold">Selected</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
           {activeTab === 'guide' && (
             <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
-              <div className="p-3 rounded-xl bg-blue-950/30 border border-blue-500/30">
-                <h4 className="font-bold text-white mb-1 flex items-center gap-1.5">
-                  <HelpCircle className="w-4 h-4 text-blue-400" />
-                  Free GitHub Pages + Google OAuth Setup
+              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200">
+                <h4 className="font-bold mb-1 flex items-center gap-1.5 text-white">
+                  <AlertTriangle className="w-4 h-4 text-amber-400" />
+                  Fixing "doesn't comply with Google OAuth 2.0 policy"
                 </h4>
-                <p className="text-slate-300">
-                  FamCal is a 100% client-side PWA with zero server costs.
+                <p className="text-xs text-amber-200/90">
+                  Google shows this error when the exact origin in your browser doesn't match the Google Cloud Console settings.
                 </p>
               </div>
 
               <div className="space-y-2">
-                <p className="font-bold text-white">Step 1: Create Google Cloud Project</p>
-                <ol className="list-decimal list-inside space-y-1 text-slate-400 pl-1">
-                  <li>Go to <strong className="text-slate-200">console.cloud.google.com</strong>.</li>
-                  <li>Enable <strong className="text-slate-200">Google Calendar API</strong> and <strong className="text-slate-200">Photos Library API</strong>.</li>
-                  <li>Go to <strong className="text-slate-200">Credentials</strong> → <strong className="text-slate-200">Create Credentials</strong> → <strong className="text-slate-200">OAuth Client ID</strong>.</li>
-                  <li>Select Application type: <strong className="text-slate-200">Web application</strong>.</li>
-                </ol>
-              </div>
-
-              <div className="space-y-2">
-                <p className="font-bold text-white">Step 2: Add Authorized Origins</p>
-                <p className="text-slate-400">Under Authorized JavaScript origins, add:</p>
-                <div className="p-2 rounded bg-slate-950 border border-white/10 font-mono text-[11px] text-blue-300">
-                  https://&lt;your-github-username&gt;.github.io<br/>
-                  http://localhost:5173
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <p className="font-bold text-white">Step 3: Paste Client ID</p>
+                <p className="font-bold text-white">1. Add Authorized JavaScript Origins (NOT Redirect URIs)</p>
                 <p className="text-slate-400">
-                  Copy the Client ID into the "Google Account" tab of this settings menu.
+                  In Google Cloud Console → <strong>Credentials</strong> → click your <strong>OAuth 2.0 Client ID</strong>.
+                  Scroll down to <strong className="text-white">Authorized JavaScript origins</strong> and add all of these:
+                </p>
+                <div className="p-2.5 rounded bg-slate-950 border border-white/10 font-mono text-[11px] text-emerald-400 space-y-1">
+                  <div>http://localhost:5173</div>
+                  <div>http://localhost</div>
+                  <div>http://127.0.0.1:5173</div>
+                  <div>https://therealtomwoods.github.io</div>
+                </div>
+                <p className="text-[11px] text-rose-300">
+                  ⚠️ <strong>Do NOT put a trailing slash <code>/</code></strong> (e.g. <code>http://localhost:5173/</code> will fail).
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-bold text-white">2. Add Your Email to "Test Users"</p>
+                <p className="text-slate-400">
+                  In Google Cloud Console → <strong>OAuth consent screen</strong>:
+                  If Publishing status is <strong>Testing</strong>, you MUST add your Google email under <strong className="text-white">Test users</strong>, otherwise Google blocks the login.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-bold text-white">3. Wait 2–5 Minutes for Google to Propagate</p>
+                <p className="text-slate-400">
+                  Google's authentication servers take 2 to 5 minutes to update after clicking <strong>Save</strong>. If you just added the origin, wait 2 minutes and refresh this page.
                 </p>
               </div>
             </div>
