@@ -19,18 +19,36 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   userToken,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
+
+  const transitionTo = (nextIdx: number) => {
+    setPreviousIndex(currentIndex);
+    setCurrentIndex(nextIdx);
+  };
 
   // Automatic photo rotation
   useEffect(() => {
     if (!photos || photos.length <= 1) return;
 
     const timer = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % photos.length);
+      setCurrentIndex((prev) => {
+        setPreviousIndex(prev);
+        return (prev + 1) % photos.length;
+      });
     }, Math.max(3, intervalSeconds) * 1000);
 
     return () => clearInterval(timer);
   }, [photos, intervalSeconds]);
+
+  // Clear previousIndex after crossfade completes (1400ms)
+  useEffect(() => {
+    if (previousIndex === null) return;
+    const timer = setTimeout(() => {
+      setPreviousIndex(null);
+    }, 1400);
+    return () => clearTimeout(timer);
+  }, [previousIndex]);
 
   // Handle bounds
   useEffect(() => {
@@ -43,12 +61,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setCurrentIndex((prev) => (prev - 1 + photos.length) % photos.length);
+    transitionTo((currentIndex - 1 + photos.length) % photos.length);
   };
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setCurrentIndex((prev) => (prev + 1) % photos.length);
+    transitionTo((currentIndex + 1) % photos.length);
   };
 
   if (!photos || photos.length === 0) {
@@ -75,9 +93,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {/* Background Slides with crossfade transition */}
+      {/* Background Slides with crossfade transition (virtualized 3-slide buffer) */}
       {photos.map((photo, idx) => {
-        const isActive = idx === currentIndex;
+        const isCurrent = idx === currentIndex;
+        const isPrev = idx === previousIndex;
+        const isNext = idx === (currentIndex + 1) % photos.length;
+
+        // Virtual DOM windowing: only mount active, crossfading-out, and preloading slides
+        if (photos.length > 3 && !isCurrent && !isPrev && !isNext) {
+          return null;
+        }
+
+        const isActive = isCurrent;
         const isUnhydratedGoogle =
           Boolean(photo.baseUrl) &&
           !photo.url.startsWith('data:') &&

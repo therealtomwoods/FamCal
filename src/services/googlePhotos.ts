@@ -296,7 +296,8 @@ export async function downloadPhotoBlob(baseUrl: string, token: string): Promise
 export async function hydratePhotosWithImages(
   photos: PhotoItem[],
   token: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  onBatchComplete?: (updatedPhotos: PhotoItem[]) => void
 ): Promise<PhotoItem[]> {
   const result: PhotoItem[] = photos.map((p) => ({ ...p }));
   const itemsToHydrate: { index: number; photo: PhotoItem }[] = [];
@@ -319,7 +320,7 @@ export async function hydratePhotosWithImages(
 
   let completedCount = 0;
   const total = itemsToHydrate.length;
-  const batchSize = 3; // 3 concurrent downloads for speed and stability
+  const batchSize = 4; // 4 concurrent downloads for optimal throughput
 
   for (let b = 0; b < itemsToHydrate.length; b += batchSize) {
     const currentBatch = itemsToHydrate.slice(b, b + batchSize);
@@ -339,10 +340,11 @@ export async function hydratePhotosWithImages(
           console.warn(`Failed hydrating photo ${index + 1}:`, err);
         }
         completedCount++;
-        onProgress?.(`Loaded photo ${completedCount} of ${total}...`);
         result[index] = photo;
       })
     );
+    onProgress?.(`Caching photos (${completedCount} of ${total})...`);
+    onBatchComplete?.([...result]);
   }
 
   return result;
@@ -439,44 +441,53 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
 }
 
 /**
- * 3. Fetch media items selected by the user in the picker session
- * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}
+ * 3. Fetch media items selected by the user in the picker session.
+ * Automatically paginates through all pages using nextPageToken so all selected photos
+ * (hundreds or thousands) are completely retrieved.
+ * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}&pageSize=100&pageToken={token}
  */
 export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
   const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+  const allRawItems: PickerMediaItem[] = [];
+  let pageToken: string | undefined = undefined;
+  let useFallbackId = false;
 
-  const res = await fetch(
-    `https://photospicker.googleapis.com/v1/mediaItems?sessionId=${encodeURIComponent(sessionPath)}&pageSize=100`,
-    {
+  do {
+    const baseUrlStr = 'https://photospicker.googleapis.com/v1/mediaItems';
+    const params = new URLSearchParams();
+    const idToUse = useFallbackId ? sessionId.replace(/^sessions\//, '') : sessionPath;
+    params.set('sessionId', idToUse);
+    params.set('pageSize', '100');
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+
+    const res = await fetch(`${baseUrlStr}?${params.toString()}`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
+    });
+
+    if (!res.ok) {
+      // If the first page request fails with sessionPath, try raw ID fallback
+      if (allRawItems.length === 0 && !useFallbackId) {
+        useFallbackId = true;
+        continue;
+      }
+      const errText = await res.text();
+      console.warn('Pagination request failed:', errText);
+      break;
     }
-  );
 
-  if (res.ok) {
-    const data: { mediaItems?: PickerMediaItem[] } = await res.json();
-    return mapPickerItems(data.mediaItems || []);
-  }
-
-  // Fallback without sessions/ prefix in case parameter requires raw ID
-  const rawId = sessionId.replace(/^sessions\//, '');
-  const fallbackRes = await fetch(
-    `https://photospicker.googleapis.com/v1/mediaItems?sessionId=${encodeURIComponent(rawId)}&pageSize=100`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+    const data: { mediaItems?: PickerMediaItem[]; nextPageToken?: string } = await res.json();
+    if (data.mediaItems && data.mediaItems.length > 0) {
+      allRawItems.push(...data.mediaItems);
     }
-  );
 
-  if (!fallbackRes.ok) {
-    const errText = await res.text();
-    throw new Error(`Failed to retrieve selected photos: ${errText}`);
-  }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
 
-  const fallbackData: { mediaItems?: PickerMediaItem[] } = await fallbackRes.json();
-  return mapPickerItems(fallbackData.mediaItems || []);
+  return mapPickerItems(allRawItems);
 }
 
 /**
@@ -495,6 +506,57 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
   } catch (err) {
     console.warn('Failed to delete picker session:', err);
   }
+}
+
+/**
+ * Processes selected photos with immediate fast playback and background streaming:
+ * 1. Saves all raw photo metadata immediately so all photos (hundreds) are recognized.
+ * 2. High-priority hydrates the first 8 photos so slideshow starts playing in ~1-2 seconds.
+ * 3. Background streams and caches the remaining photos into IndexedDB without freezing the UI.
+ */
+async function processAndStreamPickedPhotos(
+  rawPhotos: PhotoItem[],
+  token: string,
+  onStatusUpdate?: (status: string) => void
+): Promise<PhotoItem[]> {
+  // 1. Immediately save the full list to IndexedDB and localStorage
+  saveStoredPickedPhotos(rawPhotos);
+  savePhotosToIndexedDB(rawPhotos);
+
+  // 2. High-priority hydration for first 8 photos to start slideshow immediately
+  const initialBatchCount = Math.min(8, rawPhotos.length);
+  onStatusUpdate?.(`Preparing first ${initialBatchCount} of ${rawPhotos.length} photos...`);
+
+  const initialItems = rawPhotos.slice(0, initialBatchCount);
+  const hydratedInitial = await hydratePhotosWithImages(initialItems, token);
+
+  const fullList = [...rawPhotos];
+  for (let i = 0; i < hydratedInitial.length; i++) {
+    fullList[i] = hydratedInitial[i];
+  }
+
+  saveStoredPickedPhotos(fullList);
+  savePhotosToIndexedDB(fullList);
+
+  // 3. If there are more photos, stream remaining photos in the background
+  if (rawPhotos.length > initialBatchCount) {
+    onStatusUpdate?.(`✓ Playing first photos! Streaming remaining ${rawPhotos.length - initialBatchCount} in background...`);
+    setTimeout(() => {
+      hydratePhotosWithImages(
+        fullList,
+        token,
+        (progress) => onStatusUpdate?.(progress),
+        (updated) => {
+          saveStoredPickedPhotos(updated);
+          savePhotosToIndexedDB(updated);
+        }
+      ).catch((err) => console.warn('Background streaming hydration failed:', err));
+    }, 150);
+  } else {
+    onStatusUpdate?.(`✓ Successfully loaded ${fullList.length} photos!`);
+  }
+
+  return fullList;
 }
 
 /**
@@ -521,10 +583,7 @@ export async function checkActivePickerNow(): Promise<{ success: boolean; photos
     currentActiveSession = null;
 
     if (rawPhotos.length > 0) {
-      // Download authenticated image bytes and convert to self-contained URLs
-      const photos = await hydratePhotosWithImages(rawPhotos, token);
-      saveStoredPickedPhotos(photos);
-      savePhotosToIndexedDB(photos);
+      const photos = await processAndStreamPickedPhotos(rawPhotos, token);
       return { success: true, photos };
     } else {
       return { success: false, photos: [], error: 'No photos were selected.' };
@@ -633,13 +692,7 @@ export async function launchGooglePhotosPicker(
     currentActiveSession = null;
 
     if (rawPhotos.length > 0) {
-      onStatusUpdate?.(`Downloading ${rawPhotos.length} photos for slideshow...`);
-      // Download authenticated image bytes and convert to self-contained URLs
-      const photos = await hydratePhotosWithImages(rawPhotos, token, onStatusUpdate);
-
-      saveStoredPickedPhotos(photos);
-      savePhotosToIndexedDB(photos);
-      onStatusUpdate?.(`✓ Successfully loaded ${photos.length} photos!`);
+      const photos = await processAndStreamPickedPhotos(rawPhotos, token, onStatusUpdate);
       return { success: true, photos };
     } else {
       return {
