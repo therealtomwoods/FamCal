@@ -42,7 +42,6 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
 }) => {
-  const [customIdInput, setCustomIdInput] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   if (!isOpen) return null;
@@ -52,16 +51,6 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
       setIsRefreshing(true);
       await onRefreshAlbums();
       setTimeout(() => setIsRefreshing(false), 800);
-    }
-  };
-
-  const handleApplyCustomId = () => {
-    if (customIdInput.trim()) {
-      onSelectAlbum({
-        id: customIdInput.trim(),
-        title: `Album (${customIdInput.trim().slice(0, 12)}...)`,
-      });
-      onClose();
     }
   };
 
@@ -183,26 +172,14 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
           </div>
         )}
 
-        {/* Manual Album ID input */}
-        <div className="px-4 py-2.5 bg-slate-950/80 border-b border-white/5 space-y-1.5">
-          <label className="text-[11px] font-semibold text-slate-400">
-            Or paste a specific Google Photos Album ID
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={customIdInput}
-              onChange={(e) => setCustomIdInput(e.target.value)}
-              placeholder="Paste Google Photos Album ID"
-              className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs font-mono"
-            />
-            <button
-              onClick={handleApplyCustomId}
-              disabled={!customIdInput.trim()}
-              className="px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 disabled:opacity-40 text-white text-xs font-bold transition"
-            >
-              Apply
-            </button>
+        {/* Pro Tip for Album Searching in Google Photos */}
+        <div className="px-4 py-3 bg-slate-950/80 border-b border-white/5 flex items-start gap-2.5">
+          <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-slate-300 leading-relaxed space-y-0.5">
+            <p className="font-semibold text-white">How to select photos from an Album:</p>
+            <p className="text-[11px] text-slate-400">
+              Inside Google's picker window, type your <strong>Album Name</strong> into the <strong>Search bar</strong> at the top to filter and display that album's photos, then select them (hold <kbd className="px-1 py-0.5 rounded bg-slate-800 text-[10px] text-slate-200 border border-white/10 font-mono">Shift</kbd> to select multiple).
+            </p>
           </div>
         </div>
 
