@@ -72,10 +72,13 @@ export interface NestThermostatState {
   humidity: number;
   deviceName: string;
   eco: boolean;
+  deviceId?: string;
+  isRealDevice?: boolean;
 }
 
 export interface AppSettings {
   googleClientId: string;
+  nestProjectId: string; // Google Cloud Smart Device Management Enterprise/Project ID
   selectedCalendarIds: string[];
   selectedAlbumId: string;
   selectedAlbumName: string;
@@ -89,7 +92,7 @@ export interface AppSettings {
   weatherLat: number;
   weatherLon: number;
   weatherUnits: 'F' | 'C';
-  stockSymbols: string[];
+  monitoredStock: string; // Single monitored ticker e.g. "SPY" or "AAPL"
   isKioskFramed: boolean; // frame in 9:16 aspect box on wide screens
   isDemoMode: boolean;
   militaryTime: boolean;

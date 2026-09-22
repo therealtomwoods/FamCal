@@ -6,6 +6,7 @@ import {
   PhotoItem,
   WeatherData,
   StockItem,
+  NestThermostatState,
   AppSettings,
 } from './types';
 import {
@@ -13,7 +14,6 @@ import {
   getDemoEvents,
   DEMO_ALBUMS,
   DEMO_PHOTOS,
-  DEMO_STOCKS,
   DEMO_NEST,
 } from './mock/demoData';
 import {
@@ -32,7 +32,11 @@ import {
   fetchAlbumPhotos,
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
-import { fetchStockQuotes } from './services/stockService';
+import { fetchSingleStockQuote } from './services/stockService';
+import {
+  fetchRealNestThermostat,
+  setNestTargetTemperature,
+} from './services/nestService';
 
 import { Slideshow } from './components/Slideshow';
 import { AgendaCalendar } from './components/AgendaCalendar';
@@ -49,6 +53,7 @@ const SETTINGS_KEY = 'famcal_user_settings';
 
 const DEFAULT_SETTINGS: AppSettings = {
   googleClientId: '',
+  nestProjectId: '',
   selectedCalendarIds: ['primary', 'cal-kids-sports', 'cal-school', 'cal-mom', 'cal-dad'],
   selectedAlbumId: 'album-family-vacation',
   selectedAlbumName: 'Summer Family Vacation 2026',
@@ -62,7 +67,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   weatherLat: 37.7749,
   weatherLon: -122.4194,
   weatherUnits: 'F',
-  stockSymbols: ['S&P 500', 'AAPL', 'GOOGL', 'MSFT', 'NVDA'],
+  monitoredStock: 'SPY',
   isKioskFramed: true,
   isDemoMode: true,
   militaryTime: false,
@@ -93,9 +98,10 @@ export const App: React.FC = () => {
   const [albums, setAlbums] = useState<PhotoAlbum[]>(DEMO_ALBUMS);
   const [photos, setPhotos] = useState<PhotoItem[]>(DEMO_PHOTOS['album-family-vacation'] || []);
 
-  // Floating Widgets Data
+  // Ribbon Widgets Data
   const [weather, setWeather] = useState<WeatherData | null>(null);
-  const [stocks, setStocks] = useState<StockItem[]>(DEMO_STOCKS);
+  const [monitoredStockItem, setMonitoredStockItem] = useState<StockItem | null>(null);
+  const [nestState, setNestState] = useState<NestThermostatState>(DEMO_NEST);
 
   // Modals
   const [isCalendarFilterOpen, setIsCalendarFilterOpen] = useState(false);
@@ -129,16 +135,71 @@ export const App: React.FC = () => {
         settings.weatherLocation,
         settings.weatherUnits
       ).then((res) => setWeather(res));
-    }, 15 * 60 * 1000); // every 15 mins
+    }, 15 * 60 * 1000); // 15 mins
 
     return () => clearInterval(interval);
   }, [settings.showWeather, settings.weatherLat, settings.weatherLon, settings.weatherLocation, settings.weatherUnits]);
 
-  // Stocks fetcher
+  // Single Monitored Stock Quote fetcher
   useEffect(() => {
     if (!settings.showStockTicker) return;
-    fetchStockQuotes(settings.stockSymbols).then((res) => setStocks(res));
-  }, [settings.showStockTicker, settings.stockSymbols]);
+
+    const fetchQuote = () => {
+      fetchSingleStockQuote(settings.monitoredStock).then((res) => setMonitoredStockItem(res));
+    };
+
+    fetchQuote();
+    const interval = setInterval(fetchQuote, 20 * 1000); // refresh every 20s
+    return () => clearInterval(interval);
+  }, [settings.showStockTicker, settings.monitoredStock]);
+
+  // Real Nest Thermostat fetcher
+  useEffect(() => {
+    if (!settings.showNestThermostat) return;
+
+    const syncNest = async () => {
+      if (userToken && settings.nestProjectId) {
+        const realNest = await fetchRealNestThermostat(
+          userToken,
+          settings.nestProjectId,
+          settings.weatherUnits
+        );
+        if (realNest) {
+          setNestState(realNest);
+        }
+      }
+    };
+
+    syncNest();
+    const interval = setInterval(syncNest, 60 * 1000); // refresh Nest every minute
+    return () => clearInterval(interval);
+  }, [settings.showNestThermostat, userToken, settings.nestProjectId, settings.weatherUnits]);
+
+  // Nest setpoint adjustment handler
+  const handleNestTempAdjust = async (delta: number) => {
+    const newTarget = nestState.targetTemp + delta;
+    setNestState((prev) => ({ ...prev, targetTemp: newTarget }));
+
+    if (userToken && nestState.deviceId && nestState.isRealDevice) {
+      await setNestTargetTemperature(
+        userToken,
+        nestState.deviceId,
+        newTarget,
+        nestState.mode,
+        settings.weatherUnits
+      );
+    }
+  };
+
+  // Google Photos Album Refresh
+  const handleRefreshAlbums = async () => {
+    if (userToken && !settings.isDemoMode) {
+      const freshAlbums = await fetchUserPhotoAlbums(userToken);
+      setAlbums(freshAlbums);
+    } else {
+      setAlbums(DEMO_ALBUMS);
+    }
+  };
 
   // Load calendar & photo data based on mode (Demo vs Live Google)
   const refreshData = useCallback(async () => {
@@ -162,7 +223,6 @@ export const App: React.FC = () => {
       const fetchedCalendars = await fetchUserCalendars(userToken);
       setCalendars(fetchedCalendars);
 
-      // Default to select all calendars if first time
       const activeIds =
         selectedCalendarIds.length > 0
           ? selectedCalendarIds
@@ -203,7 +263,7 @@ export const App: React.FC = () => {
   // Handle Google Auth Connect
   const handleConnectGoogle = () => {
     if (!settings.googleClientId) {
-      alert('Please enter your Google OAuth Client ID first in the Settings "Google Account" tab.');
+      alert('Please enter your Google OAuth Client ID first in Settings.');
       return;
     }
     triggerGoogleSignIn(settings.googleClientId, (token) => {
@@ -257,6 +317,9 @@ export const App: React.FC = () => {
     }
   };
 
+  const anyRibbonWidgetVisible =
+    settings.showWeather || settings.showStockTicker || settings.showNestThermostat;
+
   return (
     <div className="w-full h-full min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
       {/* 9:16 Aspect Display Container */}
@@ -268,9 +331,9 @@ export const App: React.FC = () => {
         }`}
       >
         {/* ========================================================= */}
-        {/* TOP 1/3: PHOTO SLIDESHOW & FLOATING WIDGETS */}
+        {/* TOP 1/3: PHOTO SLIDESHOW (with LARGE CLOCK in top-right) */}
         {/* ========================================================= */}
-        <div className="relative w-full h-[35%] flex-shrink-0 overflow-hidden bg-black">
+        <div className="relative w-full h-[33%] flex-shrink-0 overflow-hidden bg-black">
           <Slideshow
             photos={photos}
             albumTitle={settings.selectedAlbumName || 'Google Photos'}
@@ -278,33 +341,38 @@ export const App: React.FC = () => {
             onOpenAlbumPicker={() => setIsAlbumSelectOpen(true)}
           />
 
-          {/* Floating Top Widgets Overlay (Weather, Clock, Nest) */}
-          <div className="absolute top-12 left-3 right-3 flex items-start justify-between gap-2 z-10 pointer-events-none">
-            {/* Left: Weather or Nest */}
-            <div className="flex flex-col gap-2 pointer-events-auto">
-              {settings.showWeather && (
-                <WeatherWidget weather={weather} units={settings.weatherUnits} />
-              )}
-              {settings.showNestThermostat && (
-                <NestThermostatWidget initialState={DEMO_NEST} />
-              )}
+          {/* Top-Right Large Clock */}
+          {settings.showDigitalClock && (
+            <div className="absolute top-3 right-3 z-20 pointer-events-none">
+              <ClockWidget militaryTime={settings.militaryTime} />
             </div>
-
-            {/* Right: Digital Clock & Date */}
-            <div className="pointer-events-auto">
-              {settings.showDigitalClock && (
-                <ClockWidget militaryTime={settings.militaryTime} />
-              )}
-            </div>
-          </div>
+          )}
         </div>
 
         {/* ========================================================= */}
-        {/* OPTIONAL FLOATING ADD-ON: HORIZONTAL STOCK TICKER */}
+        {/* THE FAMILY AGENDA SEPARATOR RIBBON: WEATHER, STOCK & NEST */}
         {/* ========================================================= */}
-        {settings.showStockTicker && (
-          <div className="flex-shrink-0 z-10 shadow-sm">
-            <StockTickerWidget stocks={stocks} />
+        {anyRibbonWidgetVisible && (
+          <div className="flex-shrink-0 w-full px-3 py-2 bg-gradient-to-r from-slate-900/95 via-slate-900/90 to-slate-950/95 border-y border-white/10 backdrop-blur-md z-10 select-none shadow-md">
+            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+              {/* Weather Widget */}
+              {settings.showWeather && (
+                <WeatherWidget weather={weather} units={settings.weatherUnits} />
+              )}
+
+              {/* Monitored Stock Ticker Widget */}
+              {settings.showStockTicker && (
+                <StockTickerWidget stock={monitoredStockItem} />
+              )}
+
+              {/* Nest Thermostat Widget */}
+              {settings.showNestThermostat && (
+                <NestThermostatWidget
+                  thermostat={nestState}
+                  onAdjustTemp={handleNestTempAdjust}
+                />
+              )}
+            </div>
           </div>
         )}
 
@@ -366,6 +434,8 @@ export const App: React.FC = () => {
         onDisconnectGoogle={handleDisconnectGoogle}
         albums={albums}
         onSelectAlbum={handleSelectAlbum}
+        onRefreshAlbums={handleRefreshAlbums}
+        onOpenAlbumModal={() => setIsAlbumSelectOpen(true)}
       />
     </div>
   );

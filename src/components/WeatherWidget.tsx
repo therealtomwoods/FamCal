@@ -33,23 +33,21 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({ weather, units = '
   };
 
   return (
-    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 text-white shadow-lg shadow-black/40 select-none">
+    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/80 border border-white/10 text-white select-none flex-shrink-0">
       <div className="flex-shrink-0">{renderIcon()}</div>
       <div className="flex flex-col">
         <div className="flex items-baseline gap-1">
-          <span className="text-lg font-black tracking-tight leading-none">
+          <span className="text-base sm:text-lg font-black tracking-tight leading-none text-white">
             {weather.temp}°
           </span>
-          <span className="text-[10px] font-semibold text-slate-400 uppercase">
+          <span className="text-[10px] font-semibold text-slate-400">
             {units}
           </span>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-slate-300">
-          <span>{weather.condition}</span>
+        <div className="flex items-center gap-1 text-[10px] text-slate-300 leading-tight mt-0.5">
+          <span className="truncate max-w-[85px]">{weather.city}</span>
           <span className="text-slate-500">•</span>
-          <span className="text-slate-400">
-            H:{weather.high}° L:{weather.low}°
-          </span>
+          <span className="text-slate-400 font-medium">H:{weather.high}° L:{weather.low}°</span>
         </div>
       </div>
     </div>

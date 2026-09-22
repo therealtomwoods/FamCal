@@ -1,39 +1,26 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { NestThermostatState } from '../types';
-import { Flame, Snowflake, Leaf, ChevronUp, ChevronDown } from 'lucide-react';
+import { Flame, Snowflake, Leaf, ChevronUp, ChevronDown, CheckCircle2 } from 'lucide-react';
 
 interface NestThermostatWidgetProps {
-  initialState?: NestThermostatState;
+  thermostat: NestThermostatState | null;
+  onAdjustTemp?: (delta: number) => void;
 }
 
-export const NestThermostatWidget: React.FC<NestThermostatWidgetProps> = ({ initialState }) => {
-  const [state, setState] = useState<NestThermostatState>(
-    initialState || {
-      currentTemp: 71,
-      targetTemp: 70,
-      mode: 'cool',
-      status: 'cooling',
-      humidity: 44,
-      deviceName: 'Nest Thermostat',
-      eco: false,
-    }
-  );
+export const NestThermostatWidget: React.FC<NestThermostatWidgetProps> = ({
+  thermostat,
+  onAdjustTemp,
+}) => {
+  if (!thermostat) return null;
 
-  const handleTempAdjust = (delta: number) => {
-    setState((prev) => ({
-      ...prev,
-      targetTemp: prev.targetTemp + delta,
-    }));
-  };
-
-  const isCooling = state.mode === 'cool' || state.status === 'cooling';
-  const isHeating = state.mode === 'heat' || state.status === 'heating';
+  const isCooling = thermostat.mode === 'cool' || thermostat.status === 'cooling';
+  const isHeating = thermostat.mode === 'heat' || thermostat.status === 'heating';
 
   return (
-    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-2xl bg-black/60 backdrop-blur-md border border-white/15 text-white shadow-lg select-none">
-      {/* Icon Indicator */}
+    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/80 border border-white/10 text-white select-none flex-shrink-0">
+      {/* Mode Icon */}
       <div
-        className={`p-2 rounded-xl flex items-center justify-center ${
+        className={`p-1.5 rounded-lg flex items-center justify-center ${
           isCooling
             ? 'bg-sky-500/20 text-sky-400'
             : isHeating
@@ -50,42 +37,47 @@ export const NestThermostatWidget: React.FC<NestThermostatWidgetProps> = ({ init
         )}
       </div>
 
-      {/* Thermostat Info */}
+      {/* Temp Display */}
       <div className="flex flex-col">
         <div className="flex items-baseline gap-1">
-          <span className="text-lg font-black tracking-tight leading-none">
-            {state.currentTemp}°
+          <span className="text-base sm:text-lg font-black tracking-tight leading-none text-white">
+            {thermostat.currentTemp}°
           </span>
           <span className="text-[10px] text-slate-400 font-medium">
-            Set {state.targetTemp}°
+            Set {thermostat.targetTemp}°
           </span>
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-slate-300">
+        <div className="flex items-center gap-1 text-[10px] text-slate-300 leading-tight mt-0.5">
           <span className="capitalize font-semibold text-sky-300">
-            {state.status === 'idle' ? 'Eco Idle' : `${state.mode}ing`}
+            {thermostat.status === 'idle' ? 'Idle' : thermostat.status}
           </span>
           <span className="text-slate-500">•</span>
-          <span className="text-slate-400">{state.humidity}% RH</span>
+          <span className="text-slate-400">{thermostat.humidity}% RH</span>
+          {thermostat.isRealDevice && (
+            <span title="Connected to Google Nest"><CheckCircle2 className="w-2.5 h-2.5 text-emerald-400 ml-0.5" /></span>
+          )}
         </div>
       </div>
 
-      {/* Quick Temp Bump Controls */}
-      <div className="flex flex-col gap-0.5 ml-1">
-        <button
-          onClick={() => handleTempAdjust(1)}
-          className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
-          title="Increase Target Temp"
-        >
-          <ChevronUp className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => handleTempAdjust(-1)}
-          className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
-          title="Decrease Target Temp"
-        >
-          <ChevronDown className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      {/* Target Setpoint Controls */}
+      {onAdjustTemp && (
+        <div className="flex flex-col gap-0.5 ml-0.5">
+          <button
+            onClick={() => onAdjustTemp(1)}
+            className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
+            title="Increase Target Temperature"
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => onAdjustTemp(-1)}
+            className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
+            title="Decrease Target Temperature"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

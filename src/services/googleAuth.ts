@@ -46,6 +46,7 @@ let onTokenReceivedCallback: ((token: string) => void) | null = null;
 export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/photoslibrary.readonly',
+  'https://www.googleapis.com/auth/sdm.service',
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');

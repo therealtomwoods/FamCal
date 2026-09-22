@@ -1,7 +1,21 @@
 import React, { useState } from 'react';
 import { AppSettings, PhotoAlbum } from '../types';
 import { UserProfile } from '../services/googleAuth';
-import { X, LogIn, LogOut, Sliders, Shield, Cloud, TrendingUp, Thermometer, Clock, Check, Copy, AlertTriangle } from 'lucide-react';
+import {
+  X,
+  LogIn,
+  LogOut,
+  Sliders,
+  Shield,
+  Cloud,
+  TrendingUp,
+  Thermometer,
+  Clock,
+  Check,
+  FolderOpen,
+  RefreshCw,
+  ExternalLink,
+} from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +27,8 @@ interface SettingsModalProps {
   onDisconnectGoogle: () => void;
   albums: PhotoAlbum[];
   onSelectAlbum: (album: PhotoAlbum) => void;
+  onRefreshAlbums: () => void;
+  onOpenAlbumModal: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -25,31 +41,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onDisconnectGoogle,
   albums,
   onSelectAlbum,
+  onRefreshAlbums,
+  onOpenAlbumModal,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
-  const [activeTab, setActiveTab] = useState<'general' | 'widgets' | 'google' | 'guide'>('google');
+  const [nestProjectIdInput, setNestProjectIdInput] = useState(settings.nestProjectId || '');
+  const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
+  const [activeTab, setActiveTab] = useState<'google' | 'widgets' | 'general'>('google');
   const [showSavedToast, setShowSavedToast] = useState(false);
-  const [copiedOrigin, setCopiedOrigin] = useState(false);
 
   if (!isOpen) return null;
 
-  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
-
-  const handleCopyOrigin = () => {
-    navigator.clipboard.writeText(currentOrigin);
-    setCopiedOrigin(true);
-    setTimeout(() => setCopiedOrigin(false), 2000);
-  };
-
-  const handleSaveClientId = () => {
-    onUpdateSettings({ googleClientId: clientIdInput.trim() });
+  const handleSaveAll = () => {
+    onUpdateSettings({
+      googleClientId: clientIdInput.trim(),
+      nestProjectId: nestProjectIdInput.trim(),
+      monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
+    });
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 2000);
   };
 
+  const handleQuickStockSelect = (symbol: string) => {
+    setStockSymbolInput(symbol);
+    onUpdateSettings({ monitoredStock: symbol });
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-lg bg-slate-900 border border-white/10 rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="w-full max-w-xl bg-slate-900 border border-white/10 rounded-2xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
         {/* Modal Header */}
         <div className="p-4 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -59,7 +79,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div>
               <h3 className="text-base font-bold text-white">FamCal Settings</h3>
               <p className="text-xs text-slate-400">
-                Configure Google account, display preferences & widgets
+                Google account integration, widgets, and display preferences
               </p>
             </div>
           </div>
@@ -71,21 +91,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-white/10 bg-slate-950/60 px-3 text-xs font-semibold overflow-x-auto no-scrollbar">
+        {/* Tab Navigation (Only 3 tabs now, OAuth instructions integrated into Google tab) */}
+        <div className="flex border-b border-white/10 bg-slate-950/60 px-3 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('google')}
-            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
+            className={`py-2.5 px-4 border-b-2 transition ${
               activeTab === 'google'
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            Google Account & OAuth
+            Google Account & Setup
+          </button>
+          <button
+            onClick={() => setActiveTab('widgets')}
+            className={`py-2.5 px-4 border-b-2 transition ${
+              activeTab === 'widgets'
+                ? 'border-blue-500 text-blue-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Widgets (Weather, Stock, Nest)
           </button>
           <button
             onClick={() => setActiveTab('general')}
-            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
+            className={`py-2.5 px-4 border-b-2 transition ${
               activeTab === 'general'
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -93,52 +123,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           >
             General & Display
           </button>
-          <button
-            onClick={() => setActiveTab('widgets')}
-            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
-              activeTab === 'widgets'
-                ? 'border-blue-500 text-blue-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Floating Widgets
-          </button>
-          <button
-            onClick={() => setActiveTab('guide')}
-            className={`py-2.5 px-3 border-b-2 transition whitespace-nowrap ${
-              activeTab === 'guide'
-                ? 'border-blue-500 text-blue-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            OAuth Fix Checklist
-          </button>
         </div>
 
         {/* Tab Content */}
-        <div className="p-4 overflow-y-auto space-y-4 flex-1 text-sm">
+        <div className="p-4 overflow-y-auto space-y-5 flex-1 text-sm">
+          {/* ========================================================================= */}
+          {/* TAB 1: GOOGLE ACCOUNT & CLOUD CONSOLE SETUP INSTRUCTIONS */}
+          {/* ========================================================================= */}
           {activeTab === 'google' && (
             <div className="space-y-4">
-              {/* Exact Browser Origin Helper */}
-              <div className="p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/30 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-300">Your Current Browser Origin:</span>
-                  <button
-                    onClick={handleCopyOrigin}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-600/30 hover:bg-blue-600/50 border border-blue-400/30 text-[11px] font-semibold text-blue-200 transition"
-                  >
-                    {copiedOrigin ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    {copiedOrigin ? 'Copied!' : 'Copy Origin'}
-                  </button>
-                </div>
-                <code className="block p-2 rounded bg-slate-950 border border-white/10 text-xs font-mono text-emerald-400 select-all">
-                  {currentOrigin}
-                </code>
-                <p className="text-[11px] text-slate-300 leading-normal">
-                  ⚠️ In Google Cloud Console, this exact string must be added under <strong className="text-white">Authorized JavaScript origins</strong> (NOT Redirect URIs, and without a trailing slash).
-                </p>
-              </div>
-
               {/* Google Client ID Config */}
               <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
                 <label className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -154,7 +147,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
                   />
                   <button
-                    onClick={handleSaveClientId}
+                    onClick={handleSaveAll}
                     className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
                   >
                     <Check className="w-3.5 h-3.5" />
@@ -163,12 +156,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
                 {showSavedToast && (
                   <p className="text-xs text-emerald-400 font-semibold animate-pulse">
-                    ✓ Client ID saved!
+                    ✓ Settings saved!
                   </p>
                 )}
               </div>
 
-              {/* User Account Card */}
+              {/* User Account Status */}
               {userProfile ? (
                 <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -211,31 +204,327 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               )}
 
-              {/* Photos Album Selector */}
-              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
-                <label className="text-xs font-bold text-white">Google Photos Album</label>
-                <div className="space-y-1.5">
-                  {albums.map((alb) => (
-                    <div
-                      key={alb.id}
-                      onClick={() => onSelectAlbum(alb)}
-                      className={`p-2 rounded-lg border text-xs cursor-pointer flex items-center justify-between ${
-                        alb.id === settings.selectedAlbumId
-                          ? 'bg-blue-950/50 border-blue-500/50 text-white'
-                          : 'bg-slate-900/50 border-white/5 text-slate-400 hover:bg-slate-800'
-                      }`}
-                    >
-                      <span className="font-semibold">{alb.title}</span>
-                      {alb.id === settings.selectedAlbumId && (
-                        <span className="text-[10px] text-blue-400 font-bold">Selected</span>
-                      )}
-                    </div>
-                  ))}
+              {/* Google Photos Album Selector Section */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <FolderOpen className="w-4 h-4 text-pink-400" />
+                    Google Photos Album for Slideshow
+                  </label>
+                  <button
+                    onClick={onRefreshAlbums}
+                    title="Refresh albums list from Google Photos"
+                    className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-medium"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Refresh
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-white/10">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-white truncate">
+                      {settings.selectedAlbumName || 'None Selected'}
+                    </p>
+                    <p className="text-[10px] text-slate-400 truncate">
+                      ID: {settings.selectedAlbumId || 'Default'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={onOpenAlbumModal}
+                    className="ml-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex-shrink-0"
+                  >
+                    Choose Album
+                  </button>
+                </div>
+
+                {albums.length > 0 && (
+                  <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                    {albums.map((alb) => (
+                      <div
+                        key={alb.id}
+                        onClick={() => onSelectAlbum(alb)}
+                        className={`p-2 rounded text-xs cursor-pointer flex items-center justify-between ${
+                          alb.id === settings.selectedAlbumId
+                            ? 'bg-pink-950/50 border border-pink-500/40 text-white font-bold'
+                            : 'bg-slate-900/40 border border-white/5 text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <span className="truncate">{alb.title}</span>
+                        {alb.id === settings.selectedAlbumId && (
+                          <span className="text-[10px] text-pink-400 font-bold ml-2">Active</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Real Nest Thermostat (Google Smart Device Management) Config */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2">
+                <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Thermometer className="w-4 h-4 text-amber-400" />
+                  Real Nest Thermostat (SDM Project ID)
+                </label>
+                <p className="text-[11px] text-slate-400">
+                  To connect your real Google Nest, enter your Google Device Access Enterprise ID.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={nestProjectIdInput}
+                    onChange={(e) => setNestProjectIdInput(e.target.value)}
+                    placeholder="e.g. 52458897-b673-4556-91b3-xxxxxxxxxxxx"
+                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs font-mono"
+                  />
+                  <button
+                    onClick={handleSaveAll}
+                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              {/* Comprehensive Google Cloud Console Setup Instructions */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-3 text-xs leading-relaxed">
+                <div className="flex items-center gap-2 text-blue-400 font-bold text-sm">
+                  <ExternalLink className="w-4 h-4" />
+                  <span>How to Configure Google Cloud Console</span>
+                </div>
+
+                <div className="space-y-1 text-slate-300">
+                  <p className="font-semibold text-white">1. Create a Project & Enable APIs</p>
+                  <p className="text-slate-400 pl-2">
+                    Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, create a project, then in <strong>APIs & Services → Library</strong> enable:
+                  </p>
+                  <ul className="list-disc list-inside pl-4 text-slate-300">
+                    <li><strong>Google Calendar API</strong> (for reading primary, secondary & subscribed calendars)</li>
+                    <li><strong>Photos Library API</strong> (for loading Google Photos albums)</li>
+                    <li><strong>Smart Device Management API</strong> (for connecting your real Google Nest Thermostat)</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1 text-slate-300">
+                  <p className="font-semibold text-white">2. Create OAuth 2.0 Client ID</p>
+                  <p className="text-slate-400 pl-2">
+                    Go to <strong>APIs & Services → Credentials → Create Credentials → OAuth Client ID</strong>.
+                  </p>
+                  <ul className="list-disc list-inside pl-4 text-slate-300">
+                    <li>Application type: <strong>Web application</strong></li>
+                    <li>
+                      Under <strong>Authorized JavaScript origins</strong>, add your exact GitHub Pages URL:
+                      <code className="block my-1 p-1.5 rounded bg-slate-900 text-emerald-400 font-mono text-[11px]">
+                        https://therealtomwoods.github.io
+                      </code>
+                      <em>(Also add <code>http://localhost:5173</code> if testing on local dev servers. Do not include a trailing slash <code>/</code>).</em>
+                    </li>
+                    <li>Authorized redirect URIs: <em>Leave empty (not needed for client-side popup auth).</em></li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1 text-slate-300">
+                  <p className="font-semibold text-white">3. Add Test Users</p>
+                  <p className="text-slate-400 pl-2">
+                    In <strong>OAuth consent screen</strong>, if Publishing status is <strong>Testing</strong>, add your Google account email under <strong>Test users</strong> and click <strong>Save</strong>.
+                  </p>
                 </div>
               </div>
             </div>
           )}
 
+          {/* ========================================================================= */}
+          {/* TAB 2: FLOATING WIDGETS (WEATHER, SINGLE STOCK TICKER, NEST) */}
+          {/* ========================================================================= */}
+          {activeTab === 'widgets' && (
+            <div className="space-y-4">
+              {/* Weather Widget */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Cloud className="w-5 h-5 text-sky-400" />
+                    <div>
+                      <p className="font-bold text-white">Weather Widget</p>
+                      <p className="text-xs text-slate-400">Open-Meteo live forecast in the separator ribbon</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUpdateSettings({ showWeather: !settings.showWeather })}
+                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+                      settings.showWeather ? 'bg-blue-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                        settings.showWeather ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {settings.showWeather && (
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-semibold">City Name</label>
+                      <input
+                        type="text"
+                        value={settings.weatherLocation}
+                        onChange={(e) => onUpdateSettings({ weatherLocation: e.target.value })}
+                        className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-semibold">Units</label>
+                      <div className="flex gap-1 mt-1">
+                        <button
+                          onClick={() => onUpdateSettings({ weatherUnits: 'F' })}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
+                            settings.weatherUnits === 'F'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          °F
+                        </button>
+                        <button
+                          onClick={() => onUpdateSettings({ weatherUnits: 'C' })}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
+                            settings.weatherUnits === 'C'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-900 text-slate-400'
+                          }`}
+                        >
+                          °C
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Single Stock Ticker Widget */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
+                    <div>
+                      <p className="font-bold text-white">Stock Ticker Widget</p>
+                      <p className="text-xs text-slate-400">Monitor a single stock or index in the ribbon</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUpdateSettings({ showStockTicker: !settings.showStockTicker })}
+                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+                      settings.showStockTicker ? 'bg-blue-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                        settings.showStockTicker ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {settings.showStockTicker && (
+                  <div className="pt-2 border-t border-white/5 space-y-2">
+                    <div>
+                      <label className="text-[11px] text-slate-400 font-semibold">
+                        Monitored Stock Ticker Symbol
+                      </label>
+                      <div className="flex gap-2 mt-1">
+                        <input
+                          type="text"
+                          value={stockSymbolInput}
+                          onChange={(e) => setStockSymbolInput(e.target.value.toUpperCase())}
+                          placeholder="e.g. SPY, AAPL, NVDA, TSLA"
+                          className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs font-bold uppercase"
+                        />
+                        <button
+                          onClick={handleSaveAll}
+                          className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick Suggestions */}
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                      <span className="text-[10px] text-slate-400">Popular:</span>
+                      {['SPY', 'VOO', 'AAPL', 'GOOGL', 'MSFT', 'NVDA', 'TSLA'].map((sym) => (
+                        <button
+                          key={sym}
+                          onClick={() => handleQuickStockSelect(sym)}
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold border transition ${
+                            stockSymbolInput === sym
+                              ? 'bg-blue-600 border-blue-500 text-white'
+                              : 'bg-slate-900 border-white/10 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {sym}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Nest Thermostat Widget */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Thermometer className="w-5 h-5 text-amber-400" />
+                    <div>
+                      <p className="font-bold text-white">Nest Thermostat Widget</p>
+                      <p className="text-xs text-slate-400">Climate status tile in the separator ribbon</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUpdateSettings({ showNestThermostat: !settings.showNestThermostat })}
+                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+                      settings.showNestThermostat ? 'bg-blue-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                        settings.showNestThermostat ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Clock Widget */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-blue-400" />
+                    <div>
+                      <p className="font-bold text-white">Digital Clock Widget</p>
+                      <p className="text-xs text-slate-400">Large clock in top-right corner</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUpdateSettings({ showDigitalClock: !settings.showDigitalClock })}
+                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+                      settings.showDigitalClock ? 'bg-blue-600' : 'bg-slate-700'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                        settings.showDigitalClock ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB 3: GENERAL & DISPLAY */}
+          {/* ========================================================================= */}
           {activeTab === 'general' && (
             <div className="space-y-4">
               {/* Demo Mode Toggle */}
@@ -243,7 +532,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div>
                   <p className="font-bold text-white">Interactive Demo Mode</p>
                   <p className="text-xs text-slate-400">
-                    Use rich mockup family data with sample calendars and photos
+                    Use sample family calendars, photos, and widgets
                   </p>
                 </div>
                 <button
@@ -263,7 +552,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {/* Slideshow Interval */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-300">
-                  Slideshow Photo Duration: <span className="text-blue-400">{settings.slideshowInterval}s</span>
+                  Photo Slideshow Duration: <span className="text-blue-400">{settings.slideshowInterval}s</span>
                 </label>
                 <input
                   type="range"
@@ -323,195 +612,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     }`}
                   />
                 </button>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'widgets' && (
-            <div className="space-y-4">
-              {/* Weather Toggle */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Cloud className="w-5 h-5 text-sky-400" />
-                    <div>
-                      <p className="font-bold text-white">Live Weather Widget</p>
-                      <p className="text-xs text-slate-400">Open-Meteo live forecast (Zero API key needed)</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onUpdateSettings({ showWeather: !settings.showWeather })}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      settings.showWeather ? 'bg-blue-600' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                        settings.showWeather ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                {settings.showWeather && (
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
-                    <div>
-                      <label className="text-[11px] text-slate-400 font-semibold">City Name</label>
-                      <input
-                        type="text"
-                        value={settings.weatherLocation}
-                        onChange={(e) => onUpdateSettings({ weatherLocation: e.target.value })}
-                        className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-slate-400 font-semibold">Units</label>
-                      <div className="flex gap-1 mt-1">
-                        <button
-                          onClick={() => onUpdateSettings({ weatherUnits: 'F' })}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
-                            settings.weatherUnits === 'F'
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-900 text-slate-400'
-                          }`}
-                        >
-                          °F
-                        </button>
-                        <button
-                          onClick={() => onUpdateSettings({ weatherUnits: 'C' })}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
-                            settings.weatherUnits === 'C'
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-900 text-slate-400'
-                          }`}
-                        >
-                          °C
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Stock Ticker Toggle */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-emerald-400" />
-                    <div>
-                      <p className="font-bold text-white">Stock Ticker Marquee</p>
-                      <p className="text-xs text-slate-400">Market overview and stock quotes</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onUpdateSettings({ showStockTicker: !settings.showStockTicker })}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      settings.showStockTicker ? 'bg-blue-600' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                        settings.showStockTicker ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-
-              {/* Nest Thermostat Toggle */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Thermometer className="w-5 h-5 text-amber-400" />
-                    <div>
-                      <p className="font-bold text-white">Nest Smart Thermostat</p>
-                      <p className="text-xs text-slate-400">Living room climate and temperature status</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onUpdateSettings({ showNestThermostat: !settings.showNestThermostat })}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      settings.showNestThermostat ? 'bg-blue-600' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                        settings.showNestThermostat ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-
-              {/* Clock Widget Toggle */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-blue-400" />
-                    <div>
-                      <p className="font-bold text-white">Digital Clock Overlay</p>
-                      <p className="text-xs text-slate-400">Current time and day glanceable chip</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onUpdateSettings({ showDigitalClock: !settings.showDigitalClock })}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      settings.showDigitalClock ? 'bg-blue-600' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                        settings.showDigitalClock ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'guide' && (
-            <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
-              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200">
-                <h4 className="font-bold mb-1 flex items-center gap-1.5 text-white">
-                  <AlertTriangle className="w-4 h-4 text-amber-400" />
-                  Fixing "doesn't comply with Google OAuth 2.0 policy"
-                </h4>
-                <p className="text-xs text-amber-200/90">
-                  Google shows this error when the exact origin in your browser doesn't match the Google Cloud Console settings.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <p className="font-bold text-white">1. Add Authorized JavaScript Origins (NOT Redirect URIs)</p>
-                <p className="text-slate-400">
-                  In Google Cloud Console → <strong>Credentials</strong> → click your <strong>OAuth 2.0 Client ID</strong>.
-                  Scroll down to <strong className="text-white">Authorized JavaScript origins</strong> and add all of these:
-                </p>
-                <div className="p-2.5 rounded bg-slate-950 border border-white/10 font-mono text-[11px] text-emerald-400 space-y-1">
-                  <div>http://localhost:5173</div>
-                  <div>http://localhost</div>
-                  <div>http://127.0.0.1:5173</div>
-                  <div>https://therealtomwoods.github.io</div>
-                </div>
-                <p className="text-[11px] text-rose-300">
-                  ⚠️ <strong>Do NOT put a trailing slash <code>/</code></strong> (e.g. <code>http://localhost:5173/</code> will fail).
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <p className="font-bold text-white">2. Add Your Email to "Test Users"</p>
-                <p className="text-slate-400">
-                  In Google Cloud Console → <strong>OAuth consent screen</strong>:
-                  If Publishing status is <strong>Testing</strong>, you MUST add your Google email under <strong className="text-white">Test users</strong>, otherwise Google blocks the login.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <p className="font-bold text-white">3. Wait 2–5 Minutes for Google to Propagate</p>
-                <p className="text-slate-400">
-                  Google's authentication servers take 2 to 5 minutes to update after clicking <strong>Save</strong>. If you just added the origin, wait 2 minutes and refresh this page.
-                </p>
               </div>
             </div>
           )}

@@ -8,6 +8,12 @@ interface GPhotosAlbumResponse {
     coverPhotoBaseUrl?: string;
     mediaItemsCount?: string;
   }>;
+  sharedAlbums?: Array<{
+    id: string;
+    title: string;
+    coverPhotoBaseUrl?: string;
+    mediaItemsCount?: string;
+  }>;
   nextPageToken?: string;
 }
 
@@ -29,28 +35,59 @@ interface GPhotosMediaSearchResponse {
 
 export async function fetchUserPhotoAlbums(token: string): Promise<PhotoAlbum[]> {
   try {
+    // 1. Fetch created albums
     const res = await fetch('https://photoslibrary.googleapis.com/v1/albums?pageSize=50', {
       headers: { Authorization: `Bearer ${token}` }
     });
 
-    if (!res.ok) {
-      console.warn(`Photos API returned status ${res.status}. Falling back to demo albums.`);
-      return DEMO_ALBUMS;
+    let combinedAlbums: PhotoAlbum[] = [];
+
+    if (res.ok) {
+      const data: GPhotosAlbumResponse = await res.json();
+      if (data.albums) {
+        const userAlbums = data.albums.map((album) => ({
+          id: album.id,
+          title: album.title || 'Untitled Album',
+          coverPhotoBaseUrl: album.coverPhotoBaseUrl
+            ? `${album.coverPhotoBaseUrl}=w600-h400-c`
+            : undefined,
+          mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
+        }));
+        combinedAlbums.push(...userAlbums);
+      }
+    } else {
+      console.warn(`Photos albums API returned ${res.status}: ${res.statusText}`);
     }
 
-    const data: GPhotosAlbumResponse = await res.json();
-    if (!data.albums || data.albums.length === 0) {
-      return DEMO_ALBUMS;
+    // 2. Also fetch shared albums (family shared albums often live here!)
+    try {
+      const sharedRes = await fetch('https://photoslibrary.googleapis.com/v1/sharedAlbums?pageSize=50', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (sharedRes.ok) {
+        const sharedData: GPhotosAlbumResponse = await sharedRes.json();
+        if (sharedData.sharedAlbums) {
+          const sharedAlbums = sharedData.sharedAlbums.map((album) => ({
+            id: album.id,
+            title: `Shared: ${album.title || 'Untitled Album'}`,
+            coverPhotoBaseUrl: album.coverPhotoBaseUrl
+              ? `${album.coverPhotoBaseUrl}=w600-h400-c`
+              : undefined,
+            mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
+          }));
+          combinedAlbums.push(...sharedAlbums);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch shared albums:', e);
     }
 
-    return data.albums.map((album) => ({
-      id: album.id,
-      title: album.title || 'Untitled Album',
-      coverPhotoBaseUrl: album.coverPhotoBaseUrl
-        ? `${album.coverPhotoBaseUrl}=w600-h400-c`
-        : undefined,
-      mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
-    }));
+    if (combinedAlbums.length > 0) {
+      return combinedAlbums;
+    }
+
+    console.info('No albums found in Google Photos library; including demo albums as fallback.');
+    return DEMO_ALBUMS;
   } catch (error) {
     console.error('Error fetching Google Photos albums:', error);
     return DEMO_ALBUMS;
