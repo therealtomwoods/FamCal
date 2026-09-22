@@ -4,7 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: './',
+  // Use /FamCal/ on GitHub Pages, fallback to ./ for local preview
+  base: process.env.NODE_ENV === 'production' ? '/FamCal/' : './',
   plugins: [
     react(),
     VitePWA({
@@ -18,7 +19,8 @@ export default defineConfig({
         background_color: '#0a0d14',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: './index.html',
+        start_url: '/FamCal/',
+        scope: '/FamCal/',
         icons: [
           {
             src: 'pwa-192x192.png',

@@ -28,13 +28,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build FamCal PWA
         run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Create 404.html for GitHub Pages SPA support
+        run: cp ./dist/index.html ./dist/404.html
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
