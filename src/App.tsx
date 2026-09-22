@@ -30,6 +30,8 @@ import {
 import {
   fetchUserPhotoAlbums,
   fetchAlbumPhotos,
+  launchGooglePhotosPicker,
+  getStoredPickedPhotos,
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
 import { fetchSingleStockQuote } from './services/stockService';
@@ -92,9 +94,17 @@ export const App: React.FC = () => {
   const [isLoadingEvents, setIsLoadingEvents] = useState<boolean>(false);
 
   // Photos & Albums
+  const initialPicked = getStoredPickedPhotos();
   const [albums, setAlbums] = useState<PhotoAlbum[]>(DEMO_ALBUMS);
-  const [photos, setPhotos] = useState<PhotoItem[]>(DEMO_PHOTOS['album-family-vacation'] || []);
-  const [photosStatus, setPhotosStatus] = useState<{ success: boolean; message: string } | undefined>();
+  const [photos, setPhotos] = useState<PhotoItem[]>(
+    initialPicked.length > 0 ? initialPicked : DEMO_PHOTOS['album-family-vacation'] || []
+  );
+  const [photosStatus, setPhotosStatus] = useState<{ success: boolean; message: string } | undefined>(
+    initialPicked.length > 0
+      ? { success: true, message: `Loaded ${initialPicked.length} photos from Google Photos` }
+      : undefined
+  );
+  const [isLaunchingPicker, setIsLaunchingPicker] = useState<boolean>(false);
 
   // Widgets Data
   const [weather, setWeather] = useState<WeatherData | null>(null);
@@ -272,15 +282,22 @@ export const App: React.FC = () => {
         });
       }
 
-      // 4. Fetch Media Items for selected album (or ALL_LIBRARY_PHOTOS by default)
-      const albumToLoad =
-        settings.selectedAlbumId && settings.selectedAlbumId !== 'album-family-vacation'
-          ? settings.selectedAlbumId
-          : albumResult.albums[0]?.id || 'ALL_LIBRARY_PHOTOS';
+      // 4. Fetch Media Items for selected album (or PICKED_GOOGLE_PHOTOS if available)
+      const currentPicked = getStoredPickedPhotos();
+      if (currentPicked.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS')) {
+        setPhotos(currentPicked);
+      } else {
+        const albumToLoad =
+          settings.selectedAlbumId && settings.selectedAlbumId !== 'album-family-vacation'
+            ? settings.selectedAlbumId
+            : currentPicked.length > 0
+            ? 'PICKED_GOOGLE_PHOTOS'
+            : albumResult.albums[0]?.id || 'ALL_LIBRARY_PHOTOS';
 
-      const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
-      if (fetchedPhotos.length > 0) {
-        setPhotos(fetchedPhotos);
+        const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
+        if (fetchedPhotos.length > 0) {
+          setPhotos(fetchedPhotos);
+        }
       }
     } catch (err) {
       console.error('Failed to sync live Google data:', err);
@@ -295,6 +312,48 @@ export const App: React.FC = () => {
     const interval = setInterval(refreshData, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [refreshData]);
+
+  // Google Photos Picker Flow
+  const handleLaunchPhotosPicker = async () => {
+    if (!userToken) {
+      alert('Please connect your Google account first in Settings.');
+      return;
+    }
+    setIsLaunchingPicker(true);
+    setPhotosStatus({
+      success: true,
+      message: 'Opening Google Photos picker window...',
+    });
+    try {
+      const result = await launchGooglePhotosPicker(userToken, (statusMsg) => {
+        setPhotosStatus({ success: true, message: statusMsg });
+      });
+      if (result.success && result.photos.length > 0) {
+        setPhotos(result.photos);
+        updateSettings({
+          selectedAlbumId: 'PICKED_GOOGLE_PHOTOS',
+          selectedAlbumName: `📸 Selected Google Photos (${result.photos.length})`,
+        });
+        setPhotosStatus({
+          success: true,
+          message: `✓ Active: ${result.photos.length} photos selected from Google Photos`,
+        });
+        handleRefreshAlbums();
+      } else {
+        setPhotosStatus({
+          success: false,
+          message: result.error || 'Photo selection was cancelled.',
+        });
+      }
+    } catch (err: any) {
+      setPhotosStatus({
+        success: false,
+        message: err?.message || 'Failed to select photos from Google Photos',
+      });
+    } finally {
+      setIsLaunchingPicker(false);
+    }
+  };
 
   // Handle Google Auth Connect
   const handleConnectGoogle = () => {
@@ -442,6 +501,9 @@ export const App: React.FC = () => {
         onRefreshAlbums={handleRefreshAlbums}
         photosError={photosStatus && !photosStatus.success ? photosStatus.message : undefined}
         isGoogleConnected={!!userToken}
+        onLaunchPhotosPicker={handleLaunchPhotosPicker}
+        isLaunchingPicker={isLaunchingPicker}
+        pickedPhotosCount={photos.length}
       />
 
       <SettingsModal
@@ -456,6 +518,9 @@ export const App: React.FC = () => {
         onSelectAlbum={handleSelectAlbum}
         onRefreshAlbums={handleRefreshAlbums}
         onOpenAlbumModal={() => setIsAlbumSelectOpen(true)}
+        onLaunchPhotosPicker={handleLaunchPhotosPicker}
+        isLaunchingPicker={isLaunchingPicker}
+        pickedPhotosCount={photos.length}
         nestStatus={nestStatus}
         photosStatus={photosStatus}
       />

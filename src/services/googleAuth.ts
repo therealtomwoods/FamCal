@@ -45,9 +45,10 @@ const SCOPES_KEY = 'famcal_granted_scopes';
 let tokenClientInstance: TokenClient | null = null;
 let onTokenReceivedCallback: ((token: string) => void) | null = null;
 
-// Full scopes for Calendar, Photos, Smart Device Management (Nest), and Profile
+// Full scopes for Calendar, Photos (Picker API + legacy), Smart Device Management (Nest), and Profile
 export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
   'https://www.googleapis.com/auth/photoslibrary.readonly',
   'https://www.googleapis.com/auth/photoslibrary',
   'https://www.googleapis.com/auth/photoslibrary.sharing',

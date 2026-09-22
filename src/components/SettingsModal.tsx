@@ -31,6 +31,9 @@ interface SettingsModalProps {
   onSelectAlbum: (album: PhotoAlbum) => void;
   onRefreshAlbums: () => void;
   onOpenAlbumModal: () => void;
+  onLaunchPhotosPicker?: () => void;
+  isLaunchingPicker?: boolean;
+  pickedPhotosCount?: number;
   nestStatus?: { success: boolean; message: string };
   photosStatus?: { success: boolean; message: string };
 }
@@ -47,6 +50,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectAlbum,
   onRefreshAlbums,
   onOpenAlbumModal,
+  onLaunchPhotosPicker,
+  isLaunchingPicker = false,
+  pickedPhotosCount = 0,
   nestStatus,
   photosStatus,
 }) => {
@@ -224,12 +230,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               )}
 
-              {/* Google Photos Album Selector Section */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2.5">
+              {/* Google Photos Album & Picker Section */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-white flex items-center gap-1.5">
                     <FolderOpen className="w-4 h-4 text-pink-400" />
-                    Google Photos Album for Slideshow
+                    Google Photos for Slideshow
                   </label>
                   <button
                     onClick={onRefreshAlbums}
@@ -237,6 +243,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 font-medium"
                   >
                     <RefreshCw className="w-3 h-3" /> Refresh
+                  </button>
+                </div>
+
+                {/* Primary Picker Action Button */}
+                <div className="p-3 rounded-xl bg-gradient-to-r from-pink-950/40 via-purple-950/30 to-slate-900 border border-pink-500/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-pink-300">
+                      Google Photos Picker API
+                    </span>
+                    {pickedPhotosCount > 0 && (
+                      <span className="text-[10px] text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-500/30 font-mono">
+                        {pickedPhotosCount} photos loaded
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={onLaunchPhotosPicker}
+                    disabled={isLaunchingPicker || !userProfile}
+                    className={`w-full py-2 px-3 rounded-lg font-bold text-xs transition flex items-center justify-center gap-2 ${
+                      userProfile
+                        ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white shadow-md shadow-pink-600/20'
+                        : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5'
+                    }`}
+                  >
+                    {isLaunchingPicker ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Opening Google Photos Selection...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Select Photos from Google Photos</span>
+                      </>
+                    )}
                   </button>
                 </div>
 
@@ -353,8 +394,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     In <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, enable these three APIs under <strong>APIs & Services → Library</strong>:
                   </p>
                   <ul className="list-disc list-inside pl-4 text-slate-300 space-y-0.5">
+                    <li><strong>Google Photos Picker API</strong> (Google's official API for family photo slideshows)</li>
                     <li><strong>Google Calendar API</strong> (for agenda schedule)</li>
-                    <li><strong>Photos Library API</strong> (for family photo albums)</li>
                     <li><strong>Smart Device Management API</strong> (for real Google Nest)</li>
                   </ul>
                 </div>
@@ -377,9 +418,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="space-y-1 text-slate-300">
-                  <p className="font-semibold text-white">3. Add Test Users</p>
+                  <p className="font-semibold text-white">3. Configure OAuth Consent Screen & Scopes</p>
                   <p className="text-slate-400 pl-2">
-                    In <strong>OAuth consent screen</strong>, ensure your Google email is listed under <strong>Test users</strong>.
+                    Under <strong>OAuth consent screen → Scopes for Google APIs</strong>, ensure these scopes are added:
+                  </p>
+                  <ul className="list-disc list-inside pl-4 text-slate-300 space-y-0.5 font-mono text-[11px]">
+                    <li>.../auth/photospicker.mediaitems.readonly</li>
+                    <li>.../auth/calendar.readonly</li>
+                    <li>.../auth/sdm.service</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-1 text-slate-300">
+                  <p className="font-semibold text-white">4. Add Test Users</p>
+                  <p className="text-slate-400 pl-2">
+                    In <strong>OAuth consent screen → Test users</strong>, add your personal Google email address so your login has full access while the app is in testing mode.
                   </p>
                 </div>
               </div>

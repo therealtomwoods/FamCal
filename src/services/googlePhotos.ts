@@ -1,6 +1,34 @@
 import { PhotoAlbum, PhotoItem } from '../types';
 import { DEMO_ALBUMS, DEMO_PHOTOS } from '../mock/demoData';
-import { getStoredGrantedScopes } from './googleAuth';
+
+export const PICKED_PHOTOS_KEY = 'famcal_picked_photos';
+
+export interface PickerSession {
+  id: string;
+  pickerUri: string;
+  mediaItemsSet?: boolean;
+}
+
+export interface PickerMediaItem {
+  id: string;
+  createTime?: string;
+  type?: 'PHOTO' | 'VIDEO';
+  mediaFile?: {
+    baseUrl: string;
+    mimeType?: string;
+    filename?: string;
+    mediaFileMetadata?: {
+      width?: number;
+      height?: number;
+    };
+  };
+}
+
+export interface PhotosFetchResult {
+  success: boolean;
+  albums: PhotoAlbum[];
+  error?: string;
+}
 
 interface GPhotosAlbumResponse {
   albums?: Array<{
@@ -37,40 +65,285 @@ interface GPhotosMediaSearchResponse {
   }>;
 }
 
-export interface PhotosFetchResult {
-  success: boolean;
-  albums: PhotoAlbum[];
-  error?: string;
+/**
+ * Retrieve cached picked photos from localStorage
+ */
+export function getStoredPickedPhotos(): PhotoItem[] {
+  try {
+    const raw = localStorage.getItem(PICKED_PHOTOS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
-export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchResult> {
-  if (!token) {
-    return { success: false, albums: DEMO_ALBUMS, error: 'Google account not signed in' };
+/**
+ * Cache picked photos in localStorage so slideshow runs seamlessly across reloads
+ */
+export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
+  try {
+    localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(photos));
+  } catch (err) {
+    console.warn('Failed to cache picked photos in localStorage:', err);
+  }
+}
+
+/**
+ * Clear cached picked photos
+ */
+export function clearStoredPickedPhotos(): void {
+  localStorage.removeItem(PICKED_PHOTOS_KEY);
+}
+
+/**
+ * 1. Create a Google Photos Picker Session
+ * POST https://photospicker.googleapis.com/v1/sessions
+ */
+export async function createGooglePhotosPickerSession(token: string): Promise<PickerSession> {
+  const res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    let message = `Google Photos Picker API error (${res.status})`;
+    try {
+      const parsed = JSON.parse(errText);
+      if (parsed.error?.message) {
+        message = parsed.error.message;
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
   }
 
-  // Check if granted scopes include photoslibrary
-  const granted = getStoredGrantedScopes();
-  if (granted && !granted.includes('photoslibrary')) {
-    return {
-      success: false,
-      albums: DEMO_ALBUMS,
-      error: 'Google Photos permission was not checked on the login screen. Click "Re-Authorize Google Permissions" in Settings and ensure the Google Photos checkbox is checked.',
-    };
+  return await res.json();
+}
+
+/**
+ * 2. Check Picker Session Status
+ * GET https://photospicker.googleapis.com/v1/sessions/{sessionId}
+ */
+export async function checkPickerSessionStatus(token: string, sessionId: string): Promise<boolean> {
+  const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
+  const res = await fetch(`https://photospicker.googleapis.com/v1/sessions/${cleanId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    return false;
+  }
+
+  const data = await res.json();
+  return Boolean(data.mediaItemsSet);
+}
+
+/**
+ * 3. Fetch media items selected by the user in the picker session
+ * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}
+ */
+export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
+  const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
+  const res = await fetch(`https://photospicker.googleapis.com/v1/mediaItems?sessionId=${cleanId}&pageSize=100`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to retrieve selected photos: ${errText}`);
+  }
+
+  const data: { mediaItems?: PickerMediaItem[] } = await res.json();
+  if (!data.mediaItems || data.mediaItems.length === 0) {
+    return [];
+  }
+
+  return data.mediaItems
+    .filter((item) => item.mediaFile?.baseUrl)
+    .map((item) => {
+      const baseUrl = item.mediaFile!.baseUrl;
+      return {
+        id: item.id,
+        url: `${baseUrl}=w1600-h1200`,
+        baseUrl: baseUrl,
+        filename: item.mediaFile?.filename,
+        caption: item.mediaFile?.filename || 'Family Photo',
+        width: item.mediaFile?.mediaFileMetadata?.width,
+        height: item.mediaFile?.mediaFileMetadata?.height,
+      };
+    });
+}
+
+/**
+ * 4. Delete Picker Session once photos are obtained
+ * DELETE https://photospicker.googleapis.com/v1/sessions/{sessionId}
+ */
+export async function deletePickerSession(token: string, sessionId: string): Promise<void> {
+  try {
+    const cleanId = sessionId.startsWith('sessions/') ? sessionId.replace('sessions/', '') : sessionId;
+    await fetch(`https://photospicker.googleapis.com/v1/sessions/${cleanId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    console.warn('Failed to delete picker session:', err);
+  }
+}
+
+/**
+ * High-Level Orchestrator for the Google Photos Picker Flow
+ * Opens picker popup, polls until user confirms selection, retrieves photos, and saves to cache.
+ */
+export async function launchGooglePhotosPicker(
+  token: string,
+  onStatusUpdate?: (status: string) => void
+): Promise<{ success: boolean; photos: PhotoItem[]; error?: string }> {
+  if (!token) {
+    return { success: false, photos: [], error: 'Google account not signed in' };
   }
 
   try {
-    let combinedAlbums: PhotoAlbum[] = [];
+    onStatusUpdate?.('Initializing Google Photos Picker session...');
 
-    // Always include option for All Recent Photos from Library
+    // 1. Create Picker Session
+    const session = await createGooglePhotosPickerSession(token);
+    if (!session || !session.pickerUri) {
+      throw new Error('Failed to obtain Google Photos Picker URL from Google');
+    }
+
+    onStatusUpdate?.('Opening Google Photos selection window...');
+
+    // 2. Open Google Picker in a popup window
+    const pickerUrl = session.pickerUri.includes('?')
+      ? `${session.pickerUri}&autoclose=true`
+      : `${session.pickerUri}/autoclose`;
+
+    const popupWidth = 850;
+    const popupHeight = 720;
+    const left = window.screen.width ? (window.screen.width - popupWidth) / 2 : 100;
+    const top = window.screen.height ? (window.screen.height - popupHeight) / 2 : 100;
+
+    const popup = window.open(
+      pickerUrl,
+      'GooglePhotosPicker',
+      `width=${popupWidth},height=${popupHeight},top=${top},left=${left},scrollbars=yes,resizable=yes`
+    );
+
+    if (!popup) {
+      // Fallback if popup blocker intercepted
+      window.open(pickerUrl, '_blank');
+    }
+
+    onStatusUpdate?.('Waiting for you to select photos in Google Photos...');
+
+    // 3. Poll session until user finishes selecting
+    const maxPollAttempts = 150; // ~5 minutes max
+    let pollCount = 0;
+    let itemsSet = false;
+
+    while (pollCount < maxPollAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      pollCount++;
+
+      itemsSet = await checkPickerSessionStatus(token, session.id);
+      if (itemsSet) {
+        break;
+      }
+
+      // Check if popup was closed by user
+      if (popup && popup.closed) {
+        // Check one last time in case user clicked done right before close
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        itemsSet = await checkPickerSessionStatus(token, session.id);
+        break;
+      }
+    }
+
+    if (!itemsSet) {
+      await deletePickerSession(token, session.id);
+      return {
+        success: false,
+        photos: [],
+        error: 'Photo selection was cancelled or timed out. Please try again.',
+      };
+    }
+
+    onStatusUpdate?.('Retrieving selected family photos...');
+
+    // 4. Fetch the selected photos
+    const photos = await fetchPickerSelectedMediaItems(token, session.id);
+
+    // 5. Clean up session
+    await deletePickerSession(token, session.id);
+
+    if (photos.length > 0) {
+      saveStoredPickedPhotos(photos);
+      onStatusUpdate?.(`Successfully loaded ${photos.length} photos!`);
+      return { success: true, photos };
+    } else {
+      return {
+        success: false,
+        photos: [],
+        error: 'No photos were selected. Please select at least one photo.',
+      };
+    }
+  } catch (err: any) {
+    const errorMsg = err?.message || 'Error running Google Photos Picker';
+    if (errorMsg.includes('Google Photos Picker API has not been used') || errorMsg.includes('disabled') || errorMsg.includes('403')) {
+      return {
+        success: false,
+        photos: [],
+        error: 'Google Photos Picker API must be enabled in Google Cloud Console. See Settings guide for instructions.',
+      };
+    }
+    return { success: false, photos: [], error: errorMsg };
+  }
+}
+
+/**
+ * Fetch user photo albums (supports both Picked Photos and legacy API if available)
+ */
+export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchResult> {
+  const storedPicked = getStoredPickedPhotos();
+
+  if (!token) {
+    return {
+      success: false,
+      albums: storedPicked.length > 0 ? buildAlbumsWithPicked(storedPicked) : DEMO_ALBUMS,
+      error: 'Google account not signed in',
+    };
+  }
+
+  let combinedAlbums: PhotoAlbum[] = [];
+
+  // Add Picked Photos album if user has selected photos via Picker API
+  if (storedPicked.length > 0) {
     combinedAlbums.push({
-      id: 'ALL_LIBRARY_PHOTOS',
-      title: '📸 All Recent Google Photos (Library Stream)',
-      mediaItemsCount: 100,
+      id: 'PICKED_GOOGLE_PHOTOS',
+      title: `📸 Selected Google Photos (${storedPicked.length} photos)`,
+      mediaItemsCount: storedPicked.length,
+      coverPhotoBaseUrl: storedPicked[0]?.baseUrl ? `${storedPicked[0].baseUrl}=w600-h400-c` : undefined,
     });
+  }
 
-    // 1. Fetch created albums
+  // Attempt to fetch legacy albums if allowed by user's account
+  try {
     const res = await fetch('https://photoslibrary.googleapis.com/v1/albums?pageSize=50', {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (res.ok) {
@@ -86,9 +359,13 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
         }));
         combinedAlbums.push(...userAlbums);
       }
+      return {
+        success: true,
+        albums: combinedAlbums,
+      };
     } else {
       const errText = await res.text();
-      let errorMsg = `Google Photos error (${res.status}): ${res.statusText}`;
+      let errorMsg = `Google Photos error (${res.status})`;
       try {
         const parsed = JSON.parse(errText);
         if (parsed.error?.message) {
@@ -98,54 +375,52 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
         // ignore
       }
 
-      if (errorMsg.includes('insufficient authentication scopes')) {
+      // Google deprecated legacy album listing in March 2025:
+      if (res.status === 403 || errorMsg.includes('insufficient authentication scopes')) {
         return {
-          success: false,
-          albums: DEMO_ALBUMS,
-          error: 'Insufficient authentication scopes. Please click "Re-Authorize Google Permissions" in Settings and check the box for "See your Google Photos library". Also ensure Photos Library API is enabled in Google Cloud Console.',
+          success: storedPicked.length > 0,
+          albums: combinedAlbums.length > 0 ? combinedAlbums : DEMO_ALBUMS,
+          error: 'Google deprecated the legacy Photos Library API in 2025. Please use the "Select Photos from Google Photos" picker button to choose family photos or albums for your slideshow.',
         };
       }
 
-      return { success: false, albums: DEMO_ALBUMS, error: errorMsg };
+      return {
+        success: storedPicked.length > 0,
+        albums: combinedAlbums.length > 0 ? combinedAlbums : DEMO_ALBUMS,
+        error: errorMsg,
+      };
     }
-
-    // 2. Fetch shared albums (safely; ignore errors so it doesn't fail main albums)
-    try {
-      const sharedRes = await fetch('https://photoslibrary.googleapis.com/v1/sharedAlbums?pageSize=50', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (sharedRes.ok) {
-        const sharedData: GPhotosAlbumResponse = await sharedRes.json();
-        if (sharedData.sharedAlbums) {
-          const sharedAlbums = sharedData.sharedAlbums.map((album) => ({
-            id: album.id,
-            title: `Shared: ${album.title || 'Untitled Album'}`,
-            coverPhotoBaseUrl: album.coverPhotoBaseUrl
-              ? `${album.coverPhotoBaseUrl}=w600-h400-c`
-              : undefined,
-            mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
-          }));
-          combinedAlbums.push(...sharedAlbums);
-        }
-      }
-    } catch {
-      // ignore shared albums error
-    }
-
-    return {
-      success: true,
-      albums: combinedAlbums,
-    };
   } catch (error: any) {
     return {
-      success: false,
-      albums: DEMO_ALBUMS,
+      success: storedPicked.length > 0,
+      albums: combinedAlbums.length > 0 ? combinedAlbums : DEMO_ALBUMS,
       error: error?.message || 'Network error fetching Google Photos albums',
     };
   }
 }
 
+function buildAlbumsWithPicked(picked: PhotoItem[]): PhotoAlbum[] {
+  return [
+    {
+      id: 'PICKED_GOOGLE_PHOTOS',
+      title: `📸 Selected Google Photos (${picked.length} photos)`,
+      mediaItemsCount: picked.length,
+      coverPhotoBaseUrl: picked[0]?.baseUrl ? `${picked[0].baseUrl}=w600-h400-c` : undefined,
+    },
+    ...DEMO_ALBUMS,
+  ];
+}
+
+/**
+ * Fetch photos for a specific album or library item
+ */
 export async function fetchAlbumPhotos(token: string, albumId: string): Promise<PhotoItem[]> {
+  // If Picked Google Photos
+  if (albumId === 'PICKED_GOOGLE_PHOTOS') {
+    const picked = getStoredPickedPhotos();
+    if (picked.length > 0) return picked;
+  }
+
   // If demo album id and no token
   if (!token && DEMO_PHOTOS[albumId]) {
     return DEMO_PHOTOS[albumId];
@@ -168,8 +443,8 @@ export async function fetchAlbumPhotos(token: string, albumId: string): Promise<
     }
   }
 
-  // Fetch photos from specific album
-  if (token && albumId && albumId !== 'album-family-vacation') {
+  // Fetch photos from specific legacy album if valid
+  if (token && albumId && albumId !== 'album-family-vacation' && albumId !== 'PICKED_GOOGLE_PHOTOS') {
     try {
       const res = await fetch('https://photoslibrary.googleapis.com/v1/mediaItems:search', {
         method: 'POST',
@@ -194,7 +469,12 @@ export async function fetchAlbumPhotos(token: string, albumId: string): Promise<
     }
   }
 
-  // Fallback to demo photos if album has no items or offline
+  // Fallback to stored picked photos, or demo photos
+  const storedPicked = getStoredPickedPhotos();
+  if (storedPicked.length > 0) {
+    return storedPicked;
+  }
+
   const firstDemoKey = Object.keys(DEMO_PHOTOS)[0];
   return DEMO_PHOTOS[firstDemoKey] || [];
 }
