@@ -15,6 +15,8 @@ import {
   FolderOpen,
   RefreshCw,
   ExternalLink,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -29,6 +31,8 @@ interface SettingsModalProps {
   onSelectAlbum: (album: PhotoAlbum) => void;
   onRefreshAlbums: () => void;
   onOpenAlbumModal: () => void;
+  nestStatus?: { success: boolean; message: string };
+  photosStatus?: { success: boolean; message: string };
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -43,6 +47,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectAlbum,
   onRefreshAlbums,
   onOpenAlbumModal,
+  nestStatus,
+  photosStatus,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
   const [nestProjectIdInput, setNestProjectIdInput] = useState(settings.nestProjectId || '');
@@ -91,7 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation (Only 3 tabs now, OAuth instructions integrated into Google tab) */}
+        {/* Tab Navigation */}
         <div className="flex border-b border-white/10 bg-slate-950/60 px-3 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('google')}
@@ -128,7 +134,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Tab Content */}
         <div className="p-4 overflow-y-auto space-y-5 flex-1 text-sm">
           {/* ========================================================================= */}
-          {/* TAB 1: GOOGLE ACCOUNT & CLOUD CONSOLE SETUP INSTRUCTIONS */}
+          {/* TAB 1: GOOGLE ACCOUNT & SETUP INSTRUCTIONS */}
           {/* ========================================================================= */}
           {activeTab === 'google' && (
             <div className="space-y-4">
@@ -161,38 +167,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
-              {/* User Account Status */}
+              {/* User Account Status & Re-auth */}
               {userProfile ? (
-                <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {userProfile.picture ? (
-                      <img
-                        src={userProfile.picture}
-                        alt={userProfile.name}
-                        className="w-10 h-10 rounded-full border border-emerald-400/40"
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-emerald-600/30 flex items-center justify-center text-emerald-300 font-bold">
-                        {userProfile.name[0]}
+                <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {userProfile.picture ? (
+                        <img
+                          src={userProfile.picture}
+                          alt={userProfile.name}
+                          className="w-10 h-10 rounded-full border border-emerald-400/40"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-emerald-600/30 flex items-center justify-center text-emerald-300 font-bold">
+                          {userProfile.name[0]}
+                        </div>
+                      )}
+                      <div>
+                        <p className="font-bold text-white">{userProfile.name}</p>
+                        <p className="text-xs text-emerald-300">{userProfile.email}</p>
                       </div>
-                    )}
-                    <div>
-                      <p className="font-bold text-white">{userProfile.name}</p>
-                      <p className="text-xs text-emerald-300">{userProfile.email}</p>
                     </div>
+                    <button
+                      onClick={onDisconnectGoogle}
+                      className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/30 text-rose-200 text-xs font-semibold transition flex items-center gap-1.5"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Disconnect
+                    </button>
                   </div>
-                  <button
-                    onClick={onDisconnectGoogle}
-                    className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/30 text-rose-200 text-xs font-semibold transition flex items-center gap-1.5"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    Disconnect
-                  </button>
+
+                  {/* Re-authenticate button to refresh token with newly enabled scopes */}
+                  <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs text-slate-300">Enabled new scopes or APIs?</span>
+                    <button
+                      onClick={onConnectGoogle}
+                      className="px-3 py-1 rounded-lg bg-blue-600/40 hover:bg-blue-600 border border-blue-400/40 text-blue-200 text-xs font-semibold transition flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Re-Authorize Google Permissions
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="p-4 rounded-xl bg-slate-800/60 border border-white/5 text-center space-y-3">
                   <p className="text-xs text-slate-300">
-                    Connect your Google Account to synchronize your Google Calendars and Google Photos albums.
+                    Connect your Google Account to synchronize Google Calendars, Google Photos, and Nest Thermostat.
                   </p>
                   <button
                     onClick={onConnectGoogle}
@@ -220,6 +240,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </button>
                 </div>
 
+                {photosStatus && (
+                  <div
+                    className={`p-2 rounded-lg text-xs flex items-center gap-2 ${
+                      photosStatus.success
+                        ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-950/40 text-amber-200 border border-amber-500/30'
+                    }`}
+                  >
+                    {photosStatus.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    )}
+                    <span className="truncate">{photosStatus.message}</span>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-white/10">
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-white truncate">
@@ -231,27 +268,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <button
                     onClick={onOpenAlbumModal}
-                    className="ml-2 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex-shrink-0"
+                    className="ml-2 px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold transition flex-shrink-0"
                   >
-                    Choose Album
+                    Select Album
                   </button>
                 </div>
 
                 {albums.length > 0 && (
-                  <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                  <div className="max-h-32 overflow-y-auto space-y-1 pt-1 border-t border-white/5">
                     {albums.map((alb) => (
                       <div
                         key={alb.id}
                         onClick={() => onSelectAlbum(alb)}
-                        className={`p-2 rounded text-xs cursor-pointer flex items-center justify-between ${
+                        className={`p-1.5 rounded text-xs cursor-pointer flex items-center justify-between ${
                           alb.id === settings.selectedAlbumId
-                            ? 'bg-pink-950/50 border border-pink-500/40 text-white font-bold'
-                            : 'bg-slate-900/40 border border-white/5 text-slate-300 hover:bg-slate-800'
+                            ? 'bg-pink-950/60 text-white font-bold border border-pink-500/40'
+                            : 'bg-slate-900/40 text-slate-300 hover:bg-slate-800'
                         }`}
                       >
                         <span className="truncate">{alb.title}</span>
                         {alb.id === settings.selectedAlbumId && (
-                          <span className="text-[10px] text-pink-400 font-bold ml-2">Active</span>
+                          <span className="text-[10px] text-pink-400 font-bold ml-1">Selected</span>
                         )}
                       </div>
                     ))}
@@ -259,14 +296,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
-              {/* Real Nest Thermostat (Google Smart Device Management) Config */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2">
+              {/* Real Nest Thermostat Config */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2.5">
                 <label className="text-xs font-bold text-white flex items-center gap-1.5">
                   <Thermometer className="w-4 h-4 text-amber-400" />
-                  Real Nest Thermostat (SDM Project ID)
+                  Real Google Nest Thermostat (Device Access ID)
                 </label>
                 <p className="text-[11px] text-slate-400">
-                  To connect your real Google Nest, enter your Google Device Access Enterprise ID.
+                  Enter your Google Device Access Enterprise ID to stream live data from your real thermostat.
                 </p>
                 <div className="flex gap-2">
                   <input
@@ -284,49 +321,65 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Save
                   </button>
                 </div>
+
+                {nestStatus && (
+                  <div
+                    className={`p-2 rounded-lg text-xs flex items-center gap-2 ${
+                      nestStatus.success
+                        ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-amber-950/40 text-amber-200 border border-amber-500/30'
+                    }`}
+                  >
+                    {nestStatus.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    )}
+                    <span className="truncate">{nestStatus.message}</span>
+                  </div>
+                )}
               </div>
 
-              {/* Comprehensive Google Cloud Console Setup Instructions */}
+              {/* Step-by-Step Google Cloud Console Guide */}
               <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-3 text-xs leading-relaxed">
                 <div className="flex items-center gap-2 text-blue-400 font-bold text-sm">
                   <ExternalLink className="w-4 h-4" />
-                  <span>How to Configure Google Cloud Console</span>
+                  <span>Google Cloud Console Configuration Guide</span>
                 </div>
 
                 <div className="space-y-1 text-slate-300">
-                  <p className="font-semibold text-white">1. Create a Project & Enable APIs</p>
+                  <p className="font-semibold text-white">1. Create Project & Enable APIs</p>
                   <p className="text-slate-400 pl-2">
-                    Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, create a project, then in <strong>APIs & Services → Library</strong> enable:
+                    In <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, enable these three APIs under <strong>APIs & Services → Library</strong>:
                   </p>
-                  <ul className="list-disc list-inside pl-4 text-slate-300">
-                    <li><strong>Google Calendar API</strong> (for reading primary, secondary & subscribed calendars)</li>
-                    <li><strong>Photos Library API</strong> (for loading Google Photos albums)</li>
-                    <li><strong>Smart Device Management API</strong> (for connecting your real Google Nest Thermostat)</li>
+                  <ul className="list-disc list-inside pl-4 text-slate-300 space-y-0.5">
+                    <li><strong>Google Calendar API</strong> (for agenda schedule)</li>
+                    <li><strong>Photos Library API</strong> (for family photo albums)</li>
+                    <li><strong>Smart Device Management API</strong> (for real Google Nest)</li>
                   </ul>
                 </div>
 
                 <div className="space-y-1 text-slate-300">
                   <p className="font-semibold text-white">2. Create OAuth 2.0 Client ID</p>
                   <p className="text-slate-400 pl-2">
-                    Go to <strong>APIs & Services → Credentials → Create Credentials → OAuth Client ID</strong>.
+                    Under <strong>Credentials → Create Credentials → OAuth Client ID</strong>:
                   </p>
-                  <ul className="list-disc list-inside pl-4 text-slate-300">
+                  <ul className="list-disc list-inside pl-4 text-slate-300 space-y-0.5">
                     <li>Application type: <strong>Web application</strong></li>
                     <li>
-                      Under <strong>Authorized JavaScript origins</strong>, add your exact GitHub Pages URL:
+                      Under <strong>Authorized JavaScript origins</strong>, add:
                       <code className="block my-1 p-1.5 rounded bg-slate-900 text-emerald-400 font-mono text-[11px]">
                         https://therealtomwoods.github.io
                       </code>
-                      <em>(Also add <code>http://localhost:5173</code> if testing on local dev servers. Do not include a trailing slash <code>/</code>).</em>
+                      <em>(Also include <code>http://localhost:5173</code> for local testing).</em>
                     </li>
-                    <li>Authorized redirect URIs: <em>Leave empty (not needed for client-side popup auth).</em></li>
                   </ul>
                 </div>
 
                 <div className="space-y-1 text-slate-300">
                   <p className="font-semibold text-white">3. Add Test Users</p>
                   <p className="text-slate-400 pl-2">
-                    In <strong>OAuth consent screen</strong>, if Publishing status is <strong>Testing</strong>, add your Google account email under <strong>Test users</strong> and click <strong>Save</strong>.
+                    In <strong>OAuth consent screen</strong>, ensure your Google email is listed under <strong>Test users</strong>.
                   </p>
                 </div>
               </div>
@@ -334,7 +387,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           )}
 
           {/* ========================================================================= */}
-          {/* TAB 2: FLOATING WIDGETS (WEATHER, SINGLE STOCK TICKER, NEST) */}
+          {/* TAB 2: WIDGETS */}
           {/* ========================================================================= */}
           {activeTab === 'widgets' && (
             <div className="space-y-4">
@@ -345,7 +398,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Cloud className="w-5 h-5 text-sky-400" />
                     <div>
                       <p className="font-bold text-white">Weather Widget</p>
-                      <p className="text-xs text-slate-400">Open-Meteo live forecast in the separator ribbon</p>
+                      <p className="text-xs text-slate-400">Live forecast in Family Agenda ribbon</p>
                     </div>
                   </div>
                   <button
@@ -408,8 +461,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-emerald-400" />
                     <div>
-                      <p className="font-bold text-white">Stock Ticker Widget</p>
-                      <p className="text-xs text-slate-400">Monitor a single stock or index in the ribbon</p>
+                      <p className="font-bold text-white">Live Stock Ticker Widget</p>
+                      <p className="text-xs text-slate-400">Stream real live market price for one ticker</p>
                     </div>
                   </div>
                   <button
@@ -449,9 +502,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Quick Suggestions */}
                     <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                      <span className="text-[10px] text-slate-400">Popular:</span>
+                      <span className="text-[10px] text-slate-400">Presets:</span>
                       {['SPY', 'VOO', 'AAPL', 'GOOGL', 'MSFT', 'NVDA', 'TSLA'].map((sym) => (
                         <button
                           key={sym}
@@ -477,7 +529,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Thermometer className="w-5 h-5 text-amber-400" />
                     <div>
                       <p className="font-bold text-white">Nest Thermostat Widget</p>
-                      <p className="text-xs text-slate-400">Climate status tile in the separator ribbon</p>
+                      <p className="text-xs text-slate-400">Climate tile in Family Agenda ribbon</p>
                     </div>
                   </div>
                   <button
@@ -523,7 +575,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           )}
 
           {/* ========================================================================= */}
-          {/* TAB 3: GENERAL & DISPLAY */}
+          {/* TAB 3: GENERAL */}
           {/* ========================================================================= */}
           {activeTab === 'general' && (
             <div className="space-y-4">
@@ -532,7 +584,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div>
                   <p className="font-bold text-white">Interactive Demo Mode</p>
                   <p className="text-xs text-slate-400">
-                    Use sample family calendars, photos, and widgets
+                    Use sample family calendars and photos instead of Google
                   </p>
                 </div>
                 <button

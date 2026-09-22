@@ -1,6 +1,9 @@
 import React from 'react';
-import { CalendarEvent, CalendarInfo } from '../types';
+import { CalendarEvent, CalendarInfo, WeatherData, StockItem, NestThermostatState } from '../types';
 import { EventCard } from './EventCard';
+import { WeatherWidget } from './WeatherWidget';
+import { StockTickerWidget } from './StockTickerWidget';
+import { NestThermostatWidget } from './NestThermostatWidget';
 import { Calendar as CalendarIcon, Filter, CheckCircle2, Sparkles } from 'lucide-react';
 
 interface AgendaCalendarProps {
@@ -10,6 +13,15 @@ interface AgendaCalendarProps {
   militaryTime?: boolean;
   onOpenCalendarFilter: () => void;
   isLoading?: boolean;
+  // In-line Ribbon Widgets
+  weather?: WeatherData | null;
+  stock?: StockItem | null;
+  thermostat?: NestThermostatState | null;
+  showWeather?: boolean;
+  showStockTicker?: boolean;
+  showNestThermostat?: boolean;
+  weatherUnits?: 'F' | 'C';
+  onAdjustNestTemp?: (delta: number) => void;
 }
 
 export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
@@ -19,6 +31,14 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   militaryTime = false,
   onOpenCalendarFilter,
   isLoading = false,
+  weather = null,
+  stock = null,
+  thermostat = null,
+  showWeather = true,
+  showStockTicker = true,
+  showNestThermostat = true,
+  weatherUnits = 'F',
+  onAdjustNestTemp,
 }) => {
   // Group events by day key (YYYY-MM-DD)
   const groupedEvents: Record<string, CalendarEvent[]> = {};
@@ -47,7 +67,6 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     groupedEvents[key].push(event);
   });
 
-  // Ensure today and tomorrow exist in groups even if empty, for glanceability
   if (!groupedEvents[todayKey]) groupedEvents[todayKey] = [];
   if (!groupedEvents[tomorrowKey]) groupedEvents[tomorrowKey] = [];
 
@@ -88,33 +107,56 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-950/95 overflow-hidden">
-      {/* Agenda Header & Filter Bar */}
-      <div className="flex-shrink-0 px-4 py-2.5 bg-slate-900/90 border-b border-white/10 flex items-center justify-between gap-3 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <CalendarIcon className="w-5 h-5 text-blue-400" />
-          <h2 className="text-base sm:text-lg font-bold text-white tracking-wide">
-            Family Agenda
-          </h2>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-medium border border-white/5">
-            {events.length} {events.length === 1 ? 'event' : 'events'}
-          </span>
-        </div>
+      {/* ========================================================================= */}
+      {/* IN-LINE FAMILY AGENDA HEADER & STATUS RIBBON */}
+      {/* ========================================================================= */}
+      <div className="flex-shrink-0 px-3 py-2 bg-gradient-to-r from-slate-900/95 via-slate-900/90 to-slate-950/95 border-b border-white/10 backdrop-blur-md z-10 select-none shadow-md">
+        <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+          {/* Left: Family Agenda Title */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <CalendarIcon className="w-4 h-4 text-blue-400" />
+            <h2 className="text-sm sm:text-base font-bold text-white tracking-wide whitespace-nowrap">
+              Family Agenda
+            </h2>
+            <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 font-semibold border border-white/5">
+              {events.length}
+            </span>
+          </div>
 
-        {/* Filter Calendars Button */}
-        <button
-          onClick={onOpenCalendarFilter}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-xs font-semibold text-white transition shadow-sm"
-          title="Filter Active Calendars"
-        >
-          <Filter className="w-3.5 h-3.5 text-blue-400" />
-          <span>Calendars</span>
-          <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[11px]">
-            {activeCalendars.length}
-          </span>
-        </button>
+          {/* Center: In-Line Widgets (Weather, Live Stock, Nest) */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {showWeather && (
+              <WeatherWidget weather={weather} units={weatherUnits} />
+            )}
+
+            {showStockTicker && (
+              <StockTickerWidget stock={stock} />
+            )}
+
+            {showNestThermostat && (
+              <NestThermostatWidget
+                thermostat={thermostat}
+                onAdjustTemp={onAdjustNestTemp}
+              />
+            )}
+          </div>
+
+          {/* Right: Calendars Filter Button */}
+          <button
+            onClick={onOpenCalendarFilter}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-xs font-semibold text-white transition shadow-sm flex-shrink-0"
+            title="Filter Active Calendars"
+          >
+            <Filter className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden sm:inline">Calendars</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px]">
+              {activeCalendars.length}
+            </span>
+          </button>
+        </div>
       </div>
 
-      {/* Active Calendars Quick Pills */}
+      {/* Active Calendars Quick Color Pills */}
       <div className="flex-shrink-0 px-4 py-1.5 bg-slate-950 border-b border-white/5 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
         {activeCalendars.map((cal) => (
           <span

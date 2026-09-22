@@ -37,6 +37,12 @@ interface SDMDevice {
   }>;
 }
 
+export interface NestFetchResult {
+  success: boolean;
+  thermostat?: NestThermostatState;
+  error?: string;
+}
+
 function cToF(c: number): number {
   return Math.round((c * 9) / 5 + 32);
 }
@@ -49,12 +55,17 @@ export async function fetchRealNestThermostat(
   token: string,
   projectId: string,
   tempUnits: 'F' | 'C' = 'F'
-): Promise<NestThermostatState | null> {
-  if (!projectId || projectId.trim() === '') {
-    return null;
+): Promise<NestFetchResult> {
+  if (!token) {
+    return { success: false, error: 'Google Account not signed in' };
   }
 
-  const cleanProjectId = projectId.trim();
+  if (!projectId || projectId.trim() === '') {
+    return { success: false, error: 'Nest SDM Project ID not set' };
+  }
+
+  // Strip enterprises/ prefix if user included it
+  const cleanProjectId = projectId.trim().replace(/^enterprises\//, '');
   const url = `https://smartdevicemanagement.googleapis.com/v1/enterprises/${cleanProjectId}/devices`;
 
   try {
@@ -66,23 +77,34 @@ export async function fetchRealNestThermostat(
     });
 
     if (!res.ok) {
-      console.warn(`Nest SDM API returned ${res.status}: ${res.statusText}`);
-      return null;
+      const errText = await res.text();
+      let msg = `Google Nest API error (${res.status}): ${res.statusText}`;
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed.error?.message) {
+          msg = parsed.error.message;
+        }
+      } catch {
+        // ignore
+      }
+      return { success: false, error: msg };
     }
 
     const data = await res.json();
     const devices: SDMDevice[] = data.devices || [];
 
-    // Find the first thermostat device
     const thermostat = devices.find(
       (d) =>
         d.type === 'sdm.devices.types.THERMOSTAT' ||
-        d.traits['sdm.devices.traits.ThermostatMode'] !== undefined
+        d.traits['sdm.devices.traits.ThermostatMode'] !== undefined ||
+        d.traits['sdm.devices.traits.Temperature'] !== undefined
     );
 
     if (!thermostat) {
-      console.warn('No Nest Thermostat device found in project');
-      return null;
+      return {
+        success: false,
+        error: 'No Nest Thermostat found under this Device Access project.',
+      };
     }
 
     const ambientC = thermostat.traits['sdm.devices.traits.Temperature']?.ambientTemperatureCelsius ?? 21.5;
@@ -125,19 +147,24 @@ export async function fetchRealNestThermostat(
     const targetTemp = tempUnits === 'F' ? cToF(targetC) : Math.round(targetC);
 
     return {
-      currentTemp,
-      targetTemp,
-      mode,
-      status,
-      humidity,
-      deviceName,
-      eco: isEco,
-      deviceId: thermostat.name,
-      isRealDevice: true,
+      success: true,
+      thermostat: {
+        currentTemp,
+        targetTemp,
+        mode,
+        status,
+        humidity,
+        deviceName,
+        eco: isEco,
+        deviceId: thermostat.name,
+        isRealDevice: true,
+      },
     };
-  } catch (error) {
-    console.error('Failed to fetch real Nest Thermostat data:', error);
-    return null;
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error?.message || 'Network error communicating with Google Nest API',
+    };
   }
 }
 
@@ -155,7 +182,6 @@ export async function setNestTargetTemperature(
       : 'sdm.devices.commands.ThermostatTemperatureSetpoint.SetCool';
 
   const paramKey = mode === 'heat' ? 'heatCelsius' : 'coolCelsius';
-
   const url = `https://smartdevicemanagement.googleapis.com/v1/${deviceId}:executeCommand`;
 
   try {
@@ -168,7 +194,7 @@ export async function setNestTargetTemperature(
       body: JSON.stringify({
         command: commandName,
         params: {
-          [paramKey]: Math.round(targetCelsius * 2) / 2, // Nest expects 0.5 deg steps
+          [paramKey]: Math.round(targetCelsius * 2) / 2,
         },
       }),
     });

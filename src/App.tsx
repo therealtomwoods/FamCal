@@ -44,10 +44,7 @@ import { CalendarFilterModal } from './components/CalendarFilterModal';
 import { AlbumSelectModal } from './components/AlbumSelectModal';
 import { SettingsModal } from './components/SettingsModal';
 import { KioskControls } from './components/KioskControls';
-import { WeatherWidget } from './components/WeatherWidget';
 import { ClockWidget } from './components/ClockWidget';
-import { NestThermostatWidget } from './components/NestThermostatWidget';
-import { StockTickerWidget } from './components/StockTickerWidget';
 
 const SETTINGS_KEY = 'famcal_user_settings';
 
@@ -55,8 +52,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   googleClientId: '',
   nestProjectId: '',
   selectedCalendarIds: ['primary', 'cal-kids-sports', 'cal-school', 'cal-mom', 'cal-dad'],
-  selectedAlbumId: 'album-family-vacation',
-  selectedAlbumName: 'Summer Family Vacation 2026',
+  selectedAlbumId: 'ALL_LIBRARY_PHOTOS',
+  selectedAlbumName: '📸 All Recent Google Photos',
   slideshowInterval: 10,
   slideshowTransition: 'fade',
   showWeather: true,
@@ -69,7 +66,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   weatherUnits: 'F',
   monitoredStock: 'SPY',
   isKioskFramed: true,
-  isDemoMode: true,
+  isDemoMode: false,
   militaryTime: false,
 };
 
@@ -97,11 +94,13 @@ export const App: React.FC = () => {
   // Photos & Albums
   const [albums, setAlbums] = useState<PhotoAlbum[]>(DEMO_ALBUMS);
   const [photos, setPhotos] = useState<PhotoItem[]>(DEMO_PHOTOS['album-family-vacation'] || []);
+  const [photosStatus, setPhotosStatus] = useState<{ success: boolean; message: string } | undefined>();
 
-  // Ribbon Widgets Data
+  // Widgets Data
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [monitoredStockItem, setMonitoredStockItem] = useState<StockItem | null>(null);
   const [nestState, setNestState] = useState<NestThermostatState>(DEMO_NEST);
+  const [nestStatus, setNestStatus] = useState<{ success: boolean; message: string } | undefined>();
 
   // Modals
   const [isCalendarFilterOpen, setIsCalendarFilterOpen] = useState(false);
@@ -135,12 +134,12 @@ export const App: React.FC = () => {
         settings.weatherLocation,
         settings.weatherUnits
       ).then((res) => setWeather(res));
-    }, 15 * 60 * 1000); // 15 mins
+    }, 15 * 60 * 1000);
 
     return () => clearInterval(interval);
   }, [settings.showWeather, settings.weatherLat, settings.weatherLon, settings.weatherLocation, settings.weatherUnits]);
 
-  // Single Monitored Stock Quote fetcher
+  // Real Live Stock Quote fetcher
   useEffect(() => {
     if (!settings.showStockTicker) return;
 
@@ -149,7 +148,7 @@ export const App: React.FC = () => {
     };
 
     fetchQuote();
-    const interval = setInterval(fetchQuote, 20 * 1000); // refresh every 20s
+    const interval = setInterval(fetchQuote, 25 * 1000); // refresh every 25s
     return () => clearInterval(interval);
   }, [settings.showStockTicker, settings.monitoredStock]);
 
@@ -159,19 +158,30 @@ export const App: React.FC = () => {
 
     const syncNest = async () => {
       if (userToken && settings.nestProjectId) {
-        const realNest = await fetchRealNestThermostat(
+        const nestRes = await fetchRealNestThermostat(
           userToken,
           settings.nestProjectId,
           settings.weatherUnits
         );
-        if (realNest) {
-          setNestState(realNest);
+        if (nestRes.success && nestRes.thermostat) {
+          setNestState(nestRes.thermostat);
+          setNestStatus({ success: true, message: `Connected: ${nestRes.thermostat.deviceName}` });
+        } else {
+          setNestStatus({
+            success: false,
+            message: nestRes.error || 'Nest connection failed. Check SDM Project ID and Permissions.',
+          });
         }
+      } else if (!settings.nestProjectId && userToken) {
+        setNestStatus({
+          success: false,
+          message: 'Nest Project ID not set. Enter your Device Access ID in Settings.',
+        });
       }
     };
 
     syncNest();
-    const interval = setInterval(syncNest, 60 * 1000); // refresh Nest every minute
+    const interval = setInterval(syncNest, 60 * 1000);
     return () => clearInterval(interval);
   }, [settings.showNestThermostat, userToken, settings.nestProjectId, settings.weatherUnits]);
 
@@ -191,20 +201,31 @@ export const App: React.FC = () => {
     }
   };
 
-  // Google Photos Album Refresh
-  const handleRefreshAlbums = async () => {
+  // Google Photos Albums Fetcher
+  const handleRefreshAlbums = useCallback(async () => {
     if (userToken && !settings.isDemoMode) {
-      const freshAlbums = await fetchUserPhotoAlbums(userToken);
-      setAlbums(freshAlbums);
+      const result = await fetchUserPhotoAlbums(userToken);
+      setAlbums(result.albums);
+      if (result.success) {
+        setPhotosStatus({
+          success: true,
+          message: `Connected: ${result.albums.length} albums found in Google Photos library`,
+        });
+      } else {
+        setPhotosStatus({
+          success: false,
+          message: result.error || 'Google Photos library could not be fetched.',
+        });
+      }
     } else {
       setAlbums(DEMO_ALBUMS);
     }
-  };
+  }, [userToken, settings.isDemoMode]);
 
-  // Load calendar & photo data based on mode (Demo vs Live Google)
+  // Load calendar & photo data
   const refreshData = useCallback(async () => {
+    // If user has not signed in with Google, or explicitly toggled demo mode
     if (settings.isDemoMode || !userToken) {
-      // Demo Mode Data
       setCalendars(DEMO_CALENDARS);
       const allDemo = getDemoEvents();
       const filtered = allDemo.filter((e) => selectedCalendarIds.includes(e.calendarId));
@@ -237,13 +258,28 @@ export const App: React.FC = () => {
       setEvents(fetchedEvents);
 
       // 3. Fetch Photos Albums
-      const fetchedAlbums = await fetchUserPhotoAlbums(userToken);
-      setAlbums(fetchedAlbums);
+      const albumResult = await fetchUserPhotoAlbums(userToken);
+      setAlbums(albumResult.albums);
+      if (albumResult.success) {
+        setPhotosStatus({
+          success: true,
+          message: `Connected: ${albumResult.albums.length} albums found`,
+        });
+      } else {
+        setPhotosStatus({
+          success: false,
+          message: albumResult.error || 'Could not load Google Photos library.',
+        });
+      }
 
-      // 4. Fetch Media Items for selected album
-      const albumToLoad = settings.selectedAlbumId || (fetchedAlbums[0] ? fetchedAlbums[0].id : '');
-      if (albumToLoad) {
-        const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
+      // 4. Fetch Media Items for selected album (or ALL_LIBRARY_PHOTOS by default)
+      const albumToLoad =
+        settings.selectedAlbumId && settings.selectedAlbumId !== 'album-family-vacation'
+          ? settings.selectedAlbumId
+          : albumResult.albums[0]?.id || 'ALL_LIBRARY_PHOTOS';
+
+      const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
+      if (fetchedPhotos.length > 0) {
         setPhotos(fetchedPhotos);
       }
     } catch (err) {
@@ -256,7 +292,7 @@ export const App: React.FC = () => {
   // Initial load and periodic refresh
   useEffect(() => {
     refreshData();
-    const interval = setInterval(refreshData, 5 * 60 * 1000); // refresh every 5 mins
+    const interval = setInterval(refreshData, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [refreshData]);
 
@@ -309,16 +345,15 @@ export const App: React.FC = () => {
       selectedAlbumName: album.title,
     });
 
-    if (settings.isDemoMode || !userToken) {
-      setPhotos(DEMO_PHOTOS[album.id] || DEMO_PHOTOS['album-family-vacation'] || []);
-    } else {
+    if (userToken && !settings.isDemoMode) {
       const albumPhotos = await fetchAlbumPhotos(userToken, album.id);
-      setPhotos(albumPhotos);
+      if (albumPhotos.length > 0) {
+        setPhotos(albumPhotos);
+      }
+    } else {
+      setPhotos(DEMO_PHOTOS[album.id] || DEMO_PHOTOS['album-family-vacation'] || []);
     }
   };
-
-  const anyRibbonWidgetVisible =
-    settings.showWeather || settings.showStockTicker || settings.showNestThermostat;
 
   return (
     <div className="w-full h-full min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
@@ -350,34 +385,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* ========================================================= */}
-        {/* THE FAMILY AGENDA SEPARATOR RIBBON: WEATHER, STOCK & NEST */}
-        {/* ========================================================= */}
-        {anyRibbonWidgetVisible && (
-          <div className="flex-shrink-0 w-full px-3 py-2 bg-gradient-to-r from-slate-900/95 via-slate-900/90 to-slate-950/95 border-y border-white/10 backdrop-blur-md z-10 select-none shadow-md">
-            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-              {/* Weather Widget */}
-              {settings.showWeather && (
-                <WeatherWidget weather={weather} units={settings.weatherUnits} />
-              )}
-
-              {/* Monitored Stock Ticker Widget */}
-              {settings.showStockTicker && (
-                <StockTickerWidget stock={monitoredStockItem} />
-              )}
-
-              {/* Nest Thermostat Widget */}
-              {settings.showNestThermostat && (
-                <NestThermostatWidget
-                  thermostat={nestState}
-                  onAdjustTemp={handleNestTempAdjust}
-                />
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* BOTTOM 2/3: AGENDA CALENDAR DISPLAY */}
+        {/* BOTTOM 2/3: AGENDA CALENDAR DISPLAY WITH IN-LINE RIBBON   */}
         {/* ========================================================= */}
         <div className="flex-1 w-full overflow-hidden flex flex-col bg-slate-950">
           <AgendaCalendar
@@ -387,6 +395,15 @@ export const App: React.FC = () => {
             militaryTime={settings.militaryTime}
             onOpenCalendarFilter={() => setIsCalendarFilterOpen(true)}
             isLoading={isLoadingEvents}
+            // IN-LINE WIDGETS IN THE FAMILY AGENDA RIBBON
+            weather={weather}
+            stock={monitoredStockItem}
+            thermostat={nestState}
+            showWeather={settings.showWeather}
+            showStockTicker={settings.showStockTicker}
+            showNestThermostat={settings.showNestThermostat}
+            weatherUnits={settings.weatherUnits}
+            onAdjustNestTemp={handleNestTempAdjust}
           />
         </div>
 
@@ -394,7 +411,7 @@ export const App: React.FC = () => {
         {/* BOTTOM KIOSK CONTROLS & STATUS BAR */}
         {/* ========================================================= */}
         <KioskControls
-          isDemoMode={settings.isDemoMode}
+          isDemoMode={settings.isDemoMode || !userToken}
           onRefresh={refreshData}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenCalendarFilter={() => setIsCalendarFilterOpen(true)}
@@ -422,6 +439,9 @@ export const App: React.FC = () => {
         albums={albums}
         selectedAlbumId={settings.selectedAlbumId}
         onSelectAlbum={handleSelectAlbum}
+        onRefreshAlbums={handleRefreshAlbums}
+        photosError={photosStatus && !photosStatus.success ? photosStatus.message : undefined}
+        isGoogleConnected={!!userToken}
       />
 
       <SettingsModal
@@ -436,6 +456,8 @@ export const App: React.FC = () => {
         onSelectAlbum={handleSelectAlbum}
         onRefreshAlbums={handleRefreshAlbums}
         onOpenAlbumModal={() => setIsAlbumSelectOpen(true)}
+        nestStatus={nestStatus}
+        photosStatus={photosStatus}
       />
     </div>
   );
