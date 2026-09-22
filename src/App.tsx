@@ -34,6 +34,10 @@ import {
   checkActivePickerNow,
   cancelActivePickerSession,
   getStoredPickedPhotos,
+  loadStoredPhotos,
+  savePhotosToIndexedDB,
+  saveStoredPickedPhotos,
+  hydratePhotosWithImages,
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
 import { fetchSingleStockQuote } from './services/stockService';
@@ -127,6 +131,51 @@ export const App: React.FC = () => {
       return updated;
     });
   };
+
+  // 1. Load high-resolution cached photos from IndexedDB on startup
+  useEffect(() => {
+    loadStoredPhotos().then((stored) => {
+      if (stored && stored.length > 0) {
+        setPhotos(stored);
+      }
+    });
+  }, []);
+
+  // 2. Automatically hydrate unhydrated Google Photos whenever userToken is available
+  useEffect(() => {
+    if (!userToken || settings.isDemoMode) return;
+
+    const unhydrated = photos.filter(
+      (p) => p.baseUrl && !p.url.startsWith('data:') && !p.url.startsWith('blob:') && !p.url.includes('unsplash.com')
+    );
+
+    if (unhydrated.length > 0) {
+      let isMounted = true;
+      hydratePhotosWithImages(photos, userToken, (progress) => {
+        if (isMounted) {
+          setPhotosStatus({ success: true, message: progress });
+        }
+      })
+        .then((hydrated) => {
+          if (!isMounted) return;
+          setPhotos(hydrated);
+          savePhotosToIndexedDB(hydrated);
+          saveStoredPickedPhotos(hydrated);
+          const readyCount = hydrated.filter((p) => p.url.startsWith('data:') || p.url.startsWith('blob:')).length;
+          setPhotosStatus({
+            success: true,
+            message: `✓ ${readyCount} Google Photos loaded for slideshow`,
+          });
+        })
+        .catch((err) => {
+          console.warn('Auto-hydration failed:', err);
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [userToken, photos, settings.isDemoMode]);
 
   // Weather fetcher
   useEffect(() => {
@@ -285,14 +334,14 @@ export const App: React.FC = () => {
       }
 
       // 4. Fetch Media Items for selected album (or PICKED_GOOGLE_PHOTOS if available)
-      const currentPicked = getStoredPickedPhotos();
-      if (currentPicked.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS')) {
-        setPhotos(currentPicked);
+      const currentStored = await loadStoredPhotos();
+      if (currentStored.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS')) {
+        setPhotos(currentStored);
       } else {
         const albumToLoad =
           settings.selectedAlbumId && settings.selectedAlbumId !== 'album-family-vacation'
             ? settings.selectedAlbumId
-            : currentPicked.length > 0
+            : currentStored.length > 0
             ? 'PICKED_GOOGLE_PHOTOS'
             : albumResult.albums[0]?.id || 'ALL_LIBRARY_PHOTOS';
 
@@ -479,6 +528,7 @@ export const App: React.FC = () => {
             albumTitle={settings.selectedAlbumName || 'Google Photos'}
             intervalSeconds={settings.slideshowInterval}
             onOpenAlbumPicker={() => setIsAlbumSelectOpen(true)}
+            userToken={userToken}
           />
 
           {/* Top-Right Large Clock */}

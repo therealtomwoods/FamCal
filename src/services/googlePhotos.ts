@@ -2,6 +2,8 @@ import { PhotoAlbum, PhotoItem } from '../types';
 import { DEMO_ALBUMS, DEMO_PHOTOS } from '../mock/demoData';
 
 export const PICKED_PHOTOS_KEY = 'famcal_picked_photos';
+const DB_NAME = 'FamCalPhotosDB';
+const STORE_NAME = 'photos';
 
 export interface PickerSession {
   id: string;
@@ -73,7 +75,50 @@ export function getActivePickerSession(): { id: string; token: string } | null {
 }
 
 /**
- * Retrieve cached picked photos from localStorage
+ * Native browser IndexedDB database for persistent high-resolution photo caching
+ */
+function openPhotoDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      return reject(new Error('IndexedDB not supported'));
+    }
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE_NAME);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function savePhotosToIndexedDB(photos: PhotoItem[]): Promise<void> {
+  try {
+    const db = await openPhotoDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put(photos, 'active_photos');
+  } catch (err) {
+    console.warn('Failed to save photos to IndexedDB:', err);
+  }
+}
+
+export async function loadPhotosFromIndexedDB(): Promise<PhotoItem[] | null> {
+  try {
+    const db = await openPhotoDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get('active_photos');
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Retrieve cached picked photos from localStorage or IndexedDB
  */
 export function getStoredPickedPhotos(): PhotoItem[] {
   try {
@@ -87,13 +132,34 @@ export function getStoredPickedPhotos(): PhotoItem[] {
 }
 
 /**
+ * Load stored photos prioritizing IndexedDB high-resolution cache
+ */
+export async function loadStoredPhotos(): Promise<PhotoItem[]> {
+  const idbPhotos = await loadPhotosFromIndexedDB();
+  if (idbPhotos && idbPhotos.length > 0) {
+    return idbPhotos;
+  }
+  return getStoredPickedPhotos();
+}
+
+/**
  * Cache picked photos in localStorage so slideshow runs seamlessly across reloads
  */
 export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
   try {
     localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(photos));
   } catch (err) {
-    console.warn('Failed to cache picked photos in localStorage:', err);
+    console.warn('LocalStorage full, saving lightweight version to localStorage:', err);
+    try {
+      const lightweight = photos.map((p) => ({
+        ...p,
+        // Only strip data URL if localStorage is full
+        url: p.url.startsWith('data:') && p.baseUrl ? `${p.baseUrl}=w1200-h800` : p.url,
+      }));
+      localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(lightweight));
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -102,6 +168,184 @@ export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
  */
 export function clearStoredPickedPhotos(): void {
   localStorage.removeItem(PICKED_PHOTOS_KEY);
+  try {
+    openPhotoDB().then((db) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete('active_photos');
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Helper to fetch with a timeout using AbortController
+ */
+function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
+}
+
+/**
+ * Convert a binary Blob into a self-contained base64 data URL
+ */
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Download authenticated image bytes from Google Photos baseUrl.
+ * Tries direct authenticated fetch, followed by CORS proxy fallbacks with timeout guards.
+ */
+export async function downloadPhotoBlob(baseUrl: string, token: string): Promise<Blob | null> {
+  const cleanBase = baseUrl.split('=')[0];
+  const targetUrl = `${cleanBase}=w1200-h800`;
+
+  // 1. Direct fetch with Authorization header (standard when browser allows credentials or same-origin)
+  try {
+    const res = await fetchWithTimeout(targetUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 7000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+        return blob;
+      }
+    }
+  } catch (err) {
+    console.warn('Direct image fetch blocked by browser CORS, trying proxy fallback...', err);
+  }
+
+  // 2. CORS Proxy with Authorization header override parameter (corsproxy.io)
+  try {
+    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}&reqHeaders=authorization:${encodeURIComponent(`Bearer ${token}`)}`;
+    const res = await fetchWithTimeout(proxyUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 8000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+        return blob;
+      }
+    }
+  } catch (proxyErr) {
+    console.warn('CORS proxy 1 failed:', proxyErr);
+  }
+
+  // 3. Fallback CORS Proxy (corsproxy.io alternate query syntax)
+  try {
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+    const res = await fetchWithTimeout(proxyUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 8000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+        return blob;
+      }
+    }
+  } catch (proxyErr2) {
+    console.warn('CORS proxy 2 failed:', proxyErr2);
+  }
+
+  // 4. Fallback with original resolution parameter (=d)
+  try {
+    const origUrl = `${cleanBase}=d`;
+    const res = await fetchWithTimeout(origUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 8000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+        return blob;
+      }
+    }
+  } catch (origErr) {
+    console.warn('Fetch with =d parameter failed:', origErr);
+  }
+
+  // 5. Fallback CORS Proxy (codetabs)
+  try {
+    const codeTabsUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
+    const res = await fetchWithTimeout(codeTabsUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 8000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+        return blob;
+      }
+    }
+  } catch (codeTabsErr) {
+    console.warn('CORS proxy codetabs failed:', codeTabsErr);
+  }
+
+  return null;
+}
+
+/**
+ * Hydrates photo items by downloading authenticated image bytes in parallel batches
+ * and turning them into self-contained Data URLs.
+ */
+export async function hydratePhotosWithImages(
+  photos: PhotoItem[],
+  token: string,
+  onProgress?: (msg: string) => void
+): Promise<PhotoItem[]> {
+  const result: PhotoItem[] = photos.map((p) => ({ ...p }));
+  const itemsToHydrate: { index: number; photo: PhotoItem }[] = [];
+
+  for (let i = 0; i < photos.length; i++) {
+    const p = photos[i];
+    if (
+      p.baseUrl &&
+      !p.url.startsWith('data:') &&
+      !p.url.startsWith('blob:') &&
+      !p.url.includes('unsplash.com')
+    ) {
+      itemsToHydrate.push({ index: i, photo: { ...p } });
+    }
+  }
+
+  if (itemsToHydrate.length === 0) {
+    return photos;
+  }
+
+  let completedCount = 0;
+  const total = itemsToHydrate.length;
+  const batchSize = 3; // 3 concurrent downloads for speed and stability
+
+  for (let b = 0; b < itemsToHydrate.length; b += batchSize) {
+    const currentBatch = itemsToHydrate.slice(b, b + batchSize);
+    await Promise.all(
+      currentBatch.map(async ({ index, photo }) => {
+        try {
+          const blob = await downloadPhotoBlob(photo.baseUrl!, token);
+          if (blob) {
+            try {
+              const dataUrl = await blobToDataUrl(blob);
+              photo.url = dataUrl;
+            } catch {
+              photo.url = URL.createObjectURL(blob);
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed hydrating photo ${index + 1}:`, err);
+        }
+        completedCount++;
+        onProgress?.(`Loaded photo ${completedCount} of ${total}...`);
+        result[index] = photo;
+      })
+    );
+  }
+
+  return result;
 }
 
 /**
@@ -184,7 +428,7 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
       const height = item.mediaFile?.mediaFileMetadata?.height || (item as any).height;
       return {
         id: item.id,
-        url: `${baseUrl}=w1600-h1200`,
+        url: `${baseUrl}=w1200-h800`,
         baseUrl: baseUrl,
         filename: filename,
         caption: filename,
@@ -272,12 +516,15 @@ export async function checkActivePickerNow(): Promise<{ success: boolean; photos
   }
 
   try {
-    const photos = await fetchPickerSelectedMediaItems(token, id);
+    const rawPhotos = await fetchPickerSelectedMediaItems(token, id);
     await deletePickerSession(token, id);
     currentActiveSession = null;
 
-    if (photos.length > 0) {
+    if (rawPhotos.length > 0) {
+      // Download authenticated image bytes and convert to self-contained URLs
+      const photos = await hydratePhotosWithImages(rawPhotos, token);
       saveStoredPickedPhotos(photos);
+      savePhotosToIndexedDB(photos);
       return { success: true, photos };
     } else {
       return { success: false, photos: [], error: 'No photos were selected.' };
@@ -300,7 +547,7 @@ export async function cancelActivePickerSession(): Promise<void> {
 /**
  * High-Level Orchestrator for the Google Photos Picker Flow
  * Opens picker popup, keeps session alive while user browses photos,
- * polls until user confirms selection, retrieves photos, and saves to cache.
+ * polls until user confirms selection, downloads image bytes, and saves to cache.
  */
 export async function launchGooglePhotosPicker(
   token: string,
@@ -347,8 +594,6 @@ export async function launchGooglePhotosPicker(
     onStatusUpdate?.('Please select your photos in Google Photos and click Done.');
 
     // 3. Poll session until user finishes selecting (up to 10 minutes)
-    // NOTE: We DO NOT check popup.closed because Cross-Origin-Opener-Policy
-    // severs cross-origin references and marks popup.closed = true prematurely!
     const maxPollAttempts = 200; // ~10 minutes
     let pollCount = 0;
     let itemsSet = false;
@@ -378,17 +623,22 @@ export async function launchGooglePhotosPicker(
       };
     }
 
-    onStatusUpdate?.('Retrieving selected family photos...');
+    onStatusUpdate?.('Retrieving selected photo metadata...');
 
-    // 4. Fetch the selected photos
-    const photos = await fetchPickerSelectedMediaItems(token, session.id);
+    // 4. Fetch the selected photos metadata
+    const rawPhotos = await fetchPickerSelectedMediaItems(token, session.id);
 
     // 5. Clean up session only after items are safely fetched
     await deletePickerSession(token, session.id);
     currentActiveSession = null;
 
-    if (photos.length > 0) {
+    if (rawPhotos.length > 0) {
+      onStatusUpdate?.(`Downloading ${rawPhotos.length} photos for slideshow...`);
+      // Download authenticated image bytes and convert to self-contained URLs
+      const photos = await hydratePhotosWithImages(rawPhotos, token, onStatusUpdate);
+
       saveStoredPickedPhotos(photos);
+      savePhotosToIndexedDB(photos);
       onStatusUpdate?.(`✓ Successfully loaded ${photos.length} photos!`);
       return { success: true, photos };
     } else {
@@ -433,11 +683,19 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
 
   // Add Picked Photos album if user has selected photos via Picker API
   if (storedPicked.length > 0) {
+    const coverPhoto = storedPicked[0];
+    const coverUrl =
+      coverPhoto?.url && (coverPhoto.url.startsWith('data:') || coverPhoto.url.startsWith('blob:') || coverPhoto.url.includes('unsplash.com'))
+        ? coverPhoto.url
+        : coverPhoto?.baseUrl
+        ? `${coverPhoto.baseUrl.split('=')[0]}=w600-h400-c`
+        : undefined;
+
     combinedAlbums.push({
       id: 'PICKED_GOOGLE_PHOTOS',
       title: `📸 Selected Google Photos (${storedPicked.length} photos)`,
       mediaItemsCount: storedPicked.length,
-      coverPhotoBaseUrl: storedPicked[0]?.baseUrl ? `${storedPicked[0].baseUrl}=w600-h400-c` : undefined,
+      coverPhotoBaseUrl: coverUrl,
     });
   }
 
@@ -501,12 +759,20 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
 }
 
 function buildAlbumsWithPicked(picked: PhotoItem[]): PhotoAlbum[] {
+  const coverPhoto = picked[0];
+  const coverUrl =
+    coverPhoto?.url && (coverPhoto.url.startsWith('data:') || coverPhoto.url.startsWith('blob:') || coverPhoto.url.includes('unsplash.com'))
+      ? coverPhoto.url
+      : coverPhoto?.baseUrl
+      ? `${coverPhoto.baseUrl.split('=')[0]}=w600-h400-c`
+      : undefined;
+
   return [
     {
       id: 'PICKED_GOOGLE_PHOTOS',
       title: `📸 Selected Google Photos (${picked.length} photos)`,
       mediaItemsCount: picked.length,
-      coverPhotoBaseUrl: picked[0]?.baseUrl ? `${picked[0].baseUrl}=w600-h400-c` : undefined,
+      coverPhotoBaseUrl: coverUrl,
     },
     ...DEMO_ALBUMS,
   ];
@@ -518,7 +784,7 @@ function buildAlbumsWithPicked(picked: PhotoItem[]): PhotoAlbum[] {
 export async function fetchAlbumPhotos(token: string, albumId: string): Promise<PhotoItem[]> {
   // If Picked Google Photos
   if (albumId === 'PICKED_GOOGLE_PHOTOS') {
-    const picked = getStoredPickedPhotos();
+    const picked = await loadStoredPhotos();
     if (picked.length > 0) return picked;
   }
 
@@ -571,7 +837,7 @@ export async function fetchAlbumPhotos(token: string, albumId: string): Promise<
   }
 
   // Fallback to stored picked photos, or demo photos
-  const storedPicked = getStoredPickedPhotos();
+  const storedPicked = await loadStoredPhotos();
   if (storedPicked.length > 0) {
     return storedPicked;
   }

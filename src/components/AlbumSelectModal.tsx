@@ -241,6 +241,9 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
                         src={album.coverPhotoBaseUrl}
                         alt={album.title}
                         className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
                       />
                     ) : (
                       <div className="text-slate-400">

@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { PhotoItem } from '../types';
 import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { downloadPhotoBlob } from '../services/googlePhotos';
 
 interface SlideshowProps {
   photos: PhotoItem[];
   albumTitle: string;
   intervalSeconds: number;
   onOpenAlbumPicker: () => void;
+  userToken?: string | null;
 }
 
 export const Slideshow: React.FC<SlideshowProps> = ({
@@ -14,6 +16,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   albumTitle,
   intervalSeconds,
   onOpenAlbumPicker,
+  userToken,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -75,6 +78,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       {/* Background Slides with crossfade transition */}
       {photos.map((photo, idx) => {
         const isActive = idx === currentIndex;
+        const isUnhydratedGoogle =
+          Boolean(photo.baseUrl) &&
+          !photo.url.startsWith('data:') &&
+          !photo.url.startsWith('blob:') &&
+          !photo.url.includes('unsplash.com');
+
         return (
           <div
             key={photo.id || idx}
@@ -86,11 +95,51 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               transitionDuration: '1200ms',
             }}
           >
+            {/* If photo is still awaiting hydration download, show stylish placeholder */}
+            {isUnhydratedGoogle && (
+              <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 flex flex-col items-center justify-center p-6 text-center z-0">
+                <div className="w-14 h-14 rounded-2xl bg-pink-600/10 border border-pink-500/20 flex items-center justify-center mb-3 text-pink-400 animate-pulse">
+                  <Image className="w-7 h-7" />
+                </div>
+                <p className="text-sm font-semibold text-white truncate max-w-xs">{photo.caption || 'Family Photo'}</p>
+                <span className="mt-1 text-[11px] text-pink-300/80 bg-pink-950/60 px-2.5 py-0.5 rounded-full border border-pink-500/30">
+                  Downloading high-res photo...
+                </span>
+              </div>
+            )}
+
             <img
               src={photo.url}
               alt={photo.caption || 'Family photo'}
               className="w-full h-full object-cover object-center transform transition-transform duration-[10000ms] ease-out scale-105"
               loading={idx === 0 ? 'eager' : 'lazy'}
+              onError={async (e) => {
+                const target = e.currentTarget;
+                if (target.dataset.hasFallback) return;
+                target.dataset.hasFallback = 'true';
+
+                // Attempt on-demand authenticated download if token and baseUrl are available
+                if (photo.baseUrl && userToken) {
+                  try {
+                    const blob = await downloadPhotoBlob(photo.baseUrl, userToken);
+                    if (blob) {
+                      target.src = URL.createObjectURL(blob);
+                      return;
+                    }
+                  } catch {
+                    // ignore and use fallback
+                  }
+                }
+
+                // Fallback to high quality family sample photo so no broken icon ever appears
+                const fallbacks = [
+                  'https://images.unsplash.com/photo-1502086223501-7ea6ecd79368?auto=format&fit=crop&w=1400&q=85',
+                  'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1400&q=85',
+                  'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1400&q=85',
+                  'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=1400&q=85',
+                ];
+                target.src = fallbacks[idx % fallbacks.length];
+              }}
             />
           </div>
         );
