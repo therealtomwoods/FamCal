@@ -34,18 +34,23 @@ export interface UserProfile {
   name: string;
   email: string;
   picture?: string;
+  grantedScopes?: string;
 }
 
 const TOKEN_KEY = 'famcal_google_token';
 const EXPIRY_KEY = 'famcal_token_expiry';
 const USER_KEY = 'famcal_user_profile';
+const SCOPES_KEY = 'famcal_granted_scopes';
 
 let tokenClientInstance: TokenClient | null = null;
 let onTokenReceivedCallback: ((token: string) => void) | null = null;
 
+// Full scopes for Calendar, Photos, Smart Device Management (Nest), and Profile
 export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/photoslibrary.readonly',
+  'https://www.googleapis.com/auth/photoslibrary',
+  'https://www.googleapis.com/auth/photoslibrary.sharing',
   'https://www.googleapis.com/auth/sdm.service',
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
@@ -57,11 +62,14 @@ export function getStoredAccessToken(): string | null {
   if (!token || !expiry) return null;
 
   if (Date.now() > parseInt(expiry, 10)) {
-    // Expired
     clearStoredSession();
     return null;
   }
   return token;
+}
+
+export function getStoredGrantedScopes(): string {
+  return localStorage.getItem(SCOPES_KEY) || '';
 }
 
 export function getStoredUserProfile(): UserProfile | null {
@@ -78,6 +86,7 @@ export function clearStoredSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EXPIRY_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(SCOPES_KEY);
 }
 
 export function initializeGoogleAuth(
@@ -107,9 +116,12 @@ export function initializeGoogleAuth(
           const expiryTime = Date.now() + expiresInMs;
           localStorage.setItem(TOKEN_KEY, tokenResponse.access_token);
           localStorage.setItem(EXPIRY_KEY, expiryTime.toString());
+          if (tokenResponse.scope) {
+            localStorage.setItem(SCOPES_KEY, tokenResponse.scope);
+          }
 
           // Fetch basic profile info
-          fetchUserProfile(tokenResponse.access_token);
+          fetchUserProfile(tokenResponse.access_token, tokenResponse.scope);
 
           if (onTokenReceivedCallback) {
             onTokenReceivedCallback(tokenResponse.access_token);
@@ -131,20 +143,26 @@ export function initializeGoogleAuth(
 }
 
 export function triggerGoogleSignIn(clientId: string, onToken?: (token: string) => void): void {
+  // Clear any existing expired / partial token so a fresh full-scope token is acquired
+  clearStoredSession();
+
   if (onToken) {
     onTokenReceivedCallback = onToken;
   }
+
+  // Re-create tokenClient to ensure latest GOOGLE_SCOPES are requested
+  initializeGoogleAuth(clientId, onToken);
+
   if (!tokenClientInstance) {
-    const initialized = initializeGoogleAuth(clientId, onToken);
-    if (!initialized) {
-      alert('Google Identity script is still initializing or Client ID is missing. Please check your Client ID in Settings.');
-      return;
-    }
+    alert('Google Identity script is initializing. Please wait 2 seconds and try again.');
+    return;
   }
-  tokenClientInstance?.requestAccessToken({ prompt: 'consent' });
+
+  // Force consent prompt so Google shows the checkboxes for Photos and Nest
+  tokenClientInstance.requestAccessToken({ prompt: 'consent' });
 }
 
-export async function fetchUserProfile(token: string): Promise<UserProfile | null> {
+export async function fetchUserProfile(token: string, grantedScopes?: string): Promise<UserProfile | null> {
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${token}` }
@@ -155,6 +173,7 @@ export async function fetchUserProfile(token: string): Promise<UserProfile | nul
         name: data.name || data.email,
         email: data.email,
         picture: data.picture,
+        grantedScopes: grantedScopes || getStoredGrantedScopes(),
       };
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       return profile;

@@ -1,5 +1,6 @@
 import { PhotoAlbum, PhotoItem } from '../types';
 import { DEMO_ALBUMS, DEMO_PHOTOS } from '../mock/demoData';
+import { getStoredGrantedScopes } from './googleAuth';
 
 interface GPhotosAlbumResponse {
   albums?: Array<{
@@ -34,10 +35,6 @@ interface GPhotosMediaSearchResponse {
       photo?: Record<string, unknown>;
     };
   }>;
-  error?: {
-    code?: number;
-    message?: string;
-  };
 }
 
 export interface PhotosFetchResult {
@@ -51,15 +48,47 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
     return { success: false, albums: DEMO_ALBUMS, error: 'Google account not signed in' };
   }
 
+  // Check if granted scopes include photoslibrary
+  const granted = getStoredGrantedScopes();
+  if (granted && !granted.includes('photoslibrary')) {
+    return {
+      success: false,
+      albums: DEMO_ALBUMS,
+      error: 'Google Photos permission was not checked on the login screen. Click "Re-Authorize Google Permissions" in Settings and ensure the Google Photos checkbox is checked.',
+    };
+  }
+
   try {
+    let combinedAlbums: PhotoAlbum[] = [];
+
+    // Always include option for All Recent Photos from Library
+    combinedAlbums.push({
+      id: 'ALL_LIBRARY_PHOTOS',
+      title: '📸 All Recent Google Photos (Library Stream)',
+      mediaItemsCount: 100,
+    });
+
     // 1. Fetch created albums
     const res = await fetch('https://photoslibrary.googleapis.com/v1/albums?pageSize=50', {
       headers: { Authorization: `Bearer ${token}` }
     });
 
-    if (!res.ok) {
+    if (res.ok) {
+      const data: GPhotosAlbumResponse = await res.json();
+      if (data.albums && data.albums.length > 0) {
+        const userAlbums = data.albums.map((album) => ({
+          id: album.id,
+          title: album.title || 'Untitled Album',
+          coverPhotoBaseUrl: album.coverPhotoBaseUrl
+            ? `${album.coverPhotoBaseUrl}=w600-h400-c`
+            : undefined,
+          mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
+        }));
+        combinedAlbums.push(...userAlbums);
+      }
+    } else {
       const errText = await res.text();
-      let errorMsg = `Google Photos API error (${res.status}): ${res.statusText}`;
+      let errorMsg = `Google Photos error (${res.status}): ${res.statusText}`;
       try {
         const parsed = JSON.parse(errText);
         if (parsed.error?.message) {
@@ -68,32 +97,19 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
       } catch {
         // ignore
       }
+
+      if (errorMsg.includes('insufficient authentication scopes')) {
+        return {
+          success: false,
+          albums: DEMO_ALBUMS,
+          error: 'Insufficient authentication scopes. Please click "Re-Authorize Google Permissions" in Settings and check the box for "See your Google Photos library". Also ensure Photos Library API is enabled in Google Cloud Console.',
+        };
+      }
+
       return { success: false, albums: DEMO_ALBUMS, error: errorMsg };
     }
 
-    const data: GPhotosAlbumResponse = await res.json();
-    let combinedAlbums: PhotoAlbum[] = [];
-
-    // Always include option for All Recent Photos from Library
-    combinedAlbums.push({
-      id: 'ALL_LIBRARY_PHOTOS',
-      title: '📸 All Recent Google Photos',
-      mediaItemsCount: 100,
-    });
-
-    if (data.albums && data.albums.length > 0) {
-      const userAlbums = data.albums.map((album) => ({
-        id: album.id,
-        title: album.title || 'Untitled Album',
-        coverPhotoBaseUrl: album.coverPhotoBaseUrl
-          ? `${album.coverPhotoBaseUrl}=w600-h400-c`
-          : undefined,
-        mediaItemsCount: album.mediaItemsCount ? parseInt(album.mediaItemsCount, 10) : 0,
-      }));
-      combinedAlbums.push(...userAlbums);
-    }
-
-    // 2. Also fetch shared albums
+    // 2. Fetch shared albums (safely; ignore errors so it doesn't fail main albums)
     try {
       const sharedRes = await fetch('https://photoslibrary.googleapis.com/v1/sharedAlbums?pageSize=50', {
         headers: { Authorization: `Bearer ${token}` }
@@ -112,8 +128,8 @@ export async function fetchUserPhotoAlbums(token: string): Promise<PhotosFetchRe
           combinedAlbums.push(...sharedAlbums);
         }
       }
-    } catch (e) {
-      console.warn('Could not fetch shared albums:', e);
+    } catch {
+      // ignore shared albums error
     }
 
     return {
