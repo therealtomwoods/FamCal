@@ -179,12 +179,15 @@ export function clearStoredPickedPhotos(): void {
 }
 
 /**
- * Helper to fetch with a timeout using AbortController
+ * Helper to fetch with a timeout using AbortController (with fallback for Chrome < 66)
  */
 function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
+  if (typeof AbortController !== 'undefined') {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
+  }
+  return fetch(url, options);
 }
 
 /**

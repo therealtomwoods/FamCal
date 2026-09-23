@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import legacy from '@vitejs/plugin-legacy';
 import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vitejs.dev/config/
@@ -8,6 +9,11 @@ export default defineConfig({
   base: process.env.NODE_ENV === 'production' ? '/FamCal/' : './',
   plugins: [
     react(),
+    legacy({
+      targets: ['chrome >= 49', 'edge >= 15', 'firefox >= 50', 'safari >= 10', 'defaults'],
+      additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
+      modernPolyfills: true,
+    }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
@@ -41,5 +47,8 @@ export default defineConfig({
         ]
       }
     })
-  ]
+  ],
+  build: {
+    cssTarget: 'chrome50'
+  }
 });
