@@ -34,7 +34,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, militaryTime = fals
     <div className="flex items-start gap-3.5 sm:gap-4 py-3 sm:py-3.5 px-1 border-b border-white/10 hover:bg-white/[0.03] transition-colors group">
       {/* 1. Left Vertical Colored Bar */}
       <div
-        className="w-2 sm:w-2.5 self-stretch min-h-[32px] rounded-full flex-shrink-0"
+        className="w-2 sm:w-2.5 self-stretch min-h-[36px] rounded-full flex-shrink-0"
         style={{ backgroundColor: event.color || '#3b82f6' }}
       />
 
@@ -60,7 +60,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, militaryTime = fals
 
       {/* 3. Event Content Column: Extra Large White Title & Subtitle/Location */}
       <div className="flex-1 min-w-0 pt-0.5">
-        <h4 className="text-xl sm:text-2xl font-bold text-white tracking-normal leading-snug break-words">
+        <h4 className="text-2xl sm:text-3xl font-bold text-white tracking-normal leading-snug break-words">
           {event.title}
         </h4>
 
