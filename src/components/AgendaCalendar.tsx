@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { CalendarEvent, CalendarInfo, WeatherData, StockItem, NestThermostatState } from '../types';
 import { EventCard } from './EventCard';
 import { WeatherWidget } from './WeatherWidget';
@@ -40,15 +40,24 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   weatherUnits = 'F',
   onAdjustNestTemp,
 }) => {
-  // Group events by day key (YYYY-MM-DD)
+  // Live current time tracker (auto-refreshes every 30s so past events drop off in real time)
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Group events by day key (YYYY-MM-DD), filtering out any events whose start time has already passed
   const groupedEvents: Record<string, CalendarEvent[]> = {};
 
-  const now = new Date();
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate()
+  const todayKey = `${currentTime.getFullYear()}-${String(currentTime.getMonth() + 1).padStart(2, '0')}-${String(
+    currentTime.getDate()
   ).padStart(2, '0')}`;
 
-  const tomorrow = new Date(now);
+  const tomorrow = new Date(currentTime);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(
     2,
@@ -56,6 +65,15 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   )}-${String(tomorrow.getDate()).padStart(2, '0')}`;
 
   events.forEach((event) => {
+    // If an event start time is before the current time of day, do not show it (it has passed, only show future events)
+    const isPast = event.allDay
+      ? event.end.getTime() < currentTime.getTime()
+      : event.start.getTime() < currentTime.getTime();
+
+    if (isPast) {
+      return;
+    }
+
     const key = `${event.start.getFullYear()}-${String(event.start.getMonth() + 1).padStart(
       2,
       '0'
@@ -224,7 +242,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
                 {/* Day Events or Empty State */}
                 {dayEvents.length === 0 ? (
                   <div className="py-3 px-2 text-slate-500 text-xs sm:text-sm font-medium italic">
-                    No events scheduled
+                    {isToday ? 'No more events today' : 'No events scheduled'}
                   </div>
                 ) : (
                   <div className="space-y-0.5">
