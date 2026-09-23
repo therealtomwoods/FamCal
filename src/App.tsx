@@ -6,7 +6,6 @@ import {
   PhotoItem,
   WeatherData,
   StockItem,
-  NestThermostatState,
   AppSettings,
 } from './types';
 import {
@@ -14,7 +13,6 @@ import {
   getDemoEvents,
   DEMO_ALBUMS,
   DEMO_PHOTOS,
-  DEMO_NEST,
 } from './mock/demoData';
 import {
   getStoredAccessToken,
@@ -41,10 +39,6 @@ import {
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
 import { fetchSingleStockQuote } from './services/stockService';
-import {
-  fetchRealNestThermostat,
-  setNestTargetTemperature,
-} from './services/nestService';
 
 import { Slideshow } from './components/Slideshow';
 import { AgendaCalendar } from './components/AgendaCalendar';
@@ -58,7 +52,6 @@ const SETTINGS_KEY = 'famcal_user_settings';
 
 const DEFAULT_SETTINGS: AppSettings = {
   googleClientId: '',
-  nestProjectId: '',
   selectedCalendarIds: ['primary', 'cal-kids-sports', 'cal-school', 'cal-mom', 'cal-dad'],
   selectedAlbumId: 'ALL_LIBRARY_PHOTOS',
   selectedAlbumName: '📸 All Recent Google Photos',
@@ -66,7 +59,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   slideshowTransition: 'fade',
   showWeather: true,
   showStockTicker: true,
-  showNestThermostat: true,
   showDigitalClock: true,
   weatherLocation: 'San Francisco, CA',
   weatherLat: 37.7749,
@@ -116,8 +108,6 @@ export const App: React.FC = () => {
   // Widgets Data
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [monitoredStockItem, setMonitoredStockItem] = useState<StockItem | null>(null);
-  const [nestState, setNestState] = useState<NestThermostatState>(DEMO_NEST);
-  const [nestStatus, setNestStatus] = useState<{ success: boolean; message: string } | undefined>();
 
   // Modals
   const [isCalendarFilterOpen, setIsCalendarFilterOpen] = useState(false);
@@ -225,54 +215,6 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [settings.showStockTicker, settings.monitoredStock]);
 
-  // Real Nest Thermostat fetcher
-  useEffect(() => {
-    if (!settings.showNestThermostat) return;
-
-    const syncNest = async () => {
-      if (userToken && settings.nestProjectId) {
-        const nestRes = await fetchRealNestThermostat(
-          userToken,
-          settings.nestProjectId,
-          settings.weatherUnits
-        );
-        if (nestRes.success && nestRes.thermostat) {
-          setNestState(nestRes.thermostat);
-          setNestStatus({ success: true, message: `Connected: ${nestRes.thermostat.deviceName}` });
-        } else {
-          setNestStatus({
-            success: false,
-            message: nestRes.error || 'Nest connection failed. Check SDM Project ID and Permissions.',
-          });
-        }
-      } else if (!settings.nestProjectId && userToken) {
-        setNestStatus({
-          success: false,
-          message: 'Nest Project ID not set. Enter your Device Access ID in Settings.',
-        });
-      }
-    };
-
-    syncNest();
-    const interval = setInterval(syncNest, 60 * 1000);
-    return () => clearInterval(interval);
-  }, [settings.showNestThermostat, userToken, settings.nestProjectId, settings.weatherUnits]);
-
-  // Nest setpoint adjustment handler
-  const handleNestTempAdjust = async (delta: number) => {
-    const newTarget = nestState.targetTemp + delta;
-    setNestState((prev) => ({ ...prev, targetTemp: newTarget }));
-
-    if (userToken && nestState.deviceId && nestState.isRealDevice) {
-      await setNestTargetTemperature(
-        userToken,
-        nestState.deviceId,
-        newTarget,
-        nestState.mode,
-        settings.weatherUnits
-      );
-    }
-  };
 
   // Google Photos Albums Fetcher
   const handleRefreshAlbums = useCallback(async () => {
@@ -572,12 +514,9 @@ export const App: React.FC = () => {
             // IN-LINE WIDGETS IN THE FAMILY AGENDA RIBBON
             weather={weather}
             stock={monitoredStockItem}
-            thermostat={nestState}
             showWeather={settings.showWeather}
             showStockTicker={settings.showStockTicker}
-            showNestThermostat={settings.showNestThermostat}
             weatherUnits={settings.weatherUnits}
-            onAdjustNestTemp={handleNestTempAdjust}
           />
         </div>
 
@@ -641,7 +580,6 @@ export const App: React.FC = () => {
         onCancelPicker={handleCancelPicker}
         isLaunchingPicker={isLaunchingPicker}
         pickedPhotosCount={photos.length}
-        nestStatus={nestStatus}
         photosStatus={photosStatus}
       />
     </div>

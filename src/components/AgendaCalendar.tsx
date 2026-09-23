@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { CalendarEvent, CalendarInfo, WeatherData, StockItem, NestThermostatState } from '../types';
+import { CalendarEvent, CalendarInfo, WeatherData, StockItem } from '../types';
 import { EventCard } from './EventCard';
 import { WeatherWidget } from './WeatherWidget';
 import { StockTickerWidget } from './StockTickerWidget';
-import { NestThermostatWidget } from './NestThermostatWidget';
 import { Calendar as CalendarIcon, Filter, CheckCircle2 } from 'lucide-react';
 
 interface AgendaCalendarProps {
@@ -17,12 +16,9 @@ interface AgendaCalendarProps {
   // In-line Ribbon Widgets
   weather?: WeatherData | null;
   stock?: StockItem | null;
-  thermostat?: NestThermostatState | null;
   showWeather?: boolean;
   showStockTicker?: boolean;
-  showNestThermostat?: boolean;
   weatherUnits?: 'F' | 'C';
-  onAdjustNestTemp?: (delta: number) => void;
 }
 
 export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
@@ -35,12 +31,9 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   agendaTitle = 'Family Agenda',
   weather = null,
   stock = null,
-  thermostat = null,
   showWeather = true,
   showStockTicker = true,
-  showNestThermostat = true,
   weatherUnits = 'F',
-  onAdjustNestTemp,
 }) => {
   // Live current time tracker (auto-refreshes every 30s so past events drop off in real time)
   const [currentTime, setCurrentTime] = useState(() => new Date());
@@ -147,7 +140,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
             </span>
           </div>
 
-          {/* Center: In-Line Widgets (Weather, Live Stock, Nest) */}
+          {/* Center: In-Line Widgets (Weather, Live Stock) */}
           <div className="flex items-center gap-2.5 flex-shrink-0">
             {showWeather && (
               <WeatherWidget weather={weather} units={weatherUnits} />
@@ -155,13 +148,6 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
 
             {showStockTicker && (
               <StockTickerWidget stock={stock} />
-            )}
-
-            {showNestThermostat && (
-              <NestThermostatWidget
-                thermostat={thermostat}
-                onAdjustTemp={onAdjustNestTemp}
-              />
             )}
           </div>
 

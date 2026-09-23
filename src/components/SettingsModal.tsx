@@ -9,7 +9,6 @@ import {
   Shield,
   Cloud,
   TrendingUp,
-  Thermometer,
   Clock,
   Check,
   FolderOpen,
@@ -37,7 +36,6 @@ interface SettingsModalProps {
   onCancelPicker?: () => void;
   isLaunchingPicker?: boolean;
   pickedPhotosCount?: number;
-  nestStatus?: { success: boolean; message: string };
   photosStatus?: { success: boolean; message: string };
 }
 
@@ -59,11 +57,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onCancelPicker,
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
-  nestStatus,
   photosStatus,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
-  const [nestProjectIdInput, setNestProjectIdInput] = useState(settings.nestProjectId || '');
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
   const [agendaTitleInput, setAgendaTitleInput] = useState(settings.familyAgendaTitle || 'Family Agenda');
   const [activeTab, setActiveTab] = useState<'google' | 'widgets' | 'general'>('google');
@@ -74,7 +70,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSaveAll = () => {
     onUpdateSettings({
       googleClientId: clientIdInput.trim(),
-      nestProjectId: nestProjectIdInput.trim(),
       monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
       familyAgendaTitle: agendaTitleInput.trim() || 'Family Agenda',
     });
@@ -131,7 +126,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            Widgets (Weather, Stock, Nest)
+            Widgets (Weather, Stocks)
           </button>
           <button
             onClick={() => setActiveTab('general')}
@@ -226,7 +221,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ) : (
                 <div className="p-4 rounded-xl bg-slate-800/60 border border-white/5 text-center space-y-3">
                   <p className="text-xs text-slate-300">
-                    Connect your Google Account to synchronize Google Calendars, Google Photos, and Nest Thermostat.
+                    Connect your Google Account to synchronize Google Calendars and Google Photos.
                   </p>
                   <button
                     onClick={onConnectGoogle}
@@ -361,50 +356,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
 
-              {/* Real Nest Thermostat Config */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2.5">
-                <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Thermometer className="w-4 h-4 text-amber-400" />
-                  Real Google Nest Thermostat (Device Access ID)
-                </label>
-                <p className="text-[11px] text-slate-400">
-                  Enter your Google Device Access Enterprise ID to stream live data from your real thermostat.
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={nestProjectIdInput}
-                    onChange={(e) => setNestProjectIdInput(e.target.value)}
-                    placeholder="e.g. 52458897-b673-4556-91b3-xxxxxxxxxxxx"
-                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs font-mono"
-                  />
-                  <button
-                    onClick={handleSaveAll}
-                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    Save
-                  </button>
-                </div>
-
-                {nestStatus && (
-                  <div
-                    className={`p-2 rounded-lg text-xs flex items-center gap-2 ${
-                      nestStatus.success
-                        ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30'
-                        : 'bg-amber-950/40 text-amber-200 border border-amber-500/30'
-                    }`}
-                  >
-                    {nestStatus.success ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    )}
-                    <span className="truncate">{nestStatus.message}</span>
-                  </div>
-                )}
-              </div>
-
               {/* Step-by-Step Google Cloud Console Guide */}
               <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-3 text-xs leading-relaxed">
                 <div className="flex items-center gap-2 text-blue-400 font-bold text-sm">
@@ -415,12 +366,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="space-y-1 text-slate-300">
                   <p className="font-semibold text-white">1. Create Project & Enable APIs</p>
                   <p className="text-slate-400 pl-2">
-                    In <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, enable these three APIs under <strong>APIs & Services → Library</strong>:
+                    In <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-400 underline">console.cloud.google.com</a>, enable these two APIs under <strong>APIs & Services → Library</strong>:
                   </p>
                   <ul className="list-disc list-inside pl-4 text-slate-300 space-y-0.5">
                     <li><strong>Google Photos Picker API</strong> (Google's official API for family photo slideshows)</li>
                     <li><strong>Google Calendar API</strong> (for agenda schedule)</li>
-                    <li><strong>Smart Device Management API</strong> (for real Google Nest)</li>
                   </ul>
                 </div>
 
@@ -597,31 +547,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
                 )}
-              </div>
-
-              {/* Nest Thermostat Widget */}
-              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Thermometer className="w-5 h-5 text-amber-400" />
-                    <div>
-                      <p className="font-bold text-white">Nest Thermostat Widget</p>
-                      <p className="text-xs text-slate-400">Climate tile in Family Agenda ribbon</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onUpdateSettings({ showNestThermostat: !settings.showNestThermostat })}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      settings.showNestThermostat ? 'bg-blue-600' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                        settings.showNestThermostat ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
               </div>
 
               {/* Clock Widget */}

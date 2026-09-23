@@ -89,7 +89,6 @@ export interface NestThermostatState {
 
 export interface AppSettings {
   googleClientId: string;
-  nestProjectId: string; // Google Cloud Smart Device Management Enterprise/Project ID
   selectedCalendarIds: string[];
   selectedAlbumId: string;
   selectedAlbumName: string;
@@ -97,7 +96,6 @@ export interface AppSettings {
   slideshowTransition: 'fade' | 'slide' | 'zoom';
   showWeather: boolean;
   showStockTicker: boolean;
-  showNestThermostat: boolean;
   showDigitalClock: boolean;
   weatherLocation: string;
   weatherLat: number;
