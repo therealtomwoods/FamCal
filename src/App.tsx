@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   CalendarInfo,
   CalendarEvent,
@@ -141,40 +141,51 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  const hydratedBatchRef = useRef<string>('');
+
   // 2. Automatically hydrate unhydrated Google Photos whenever userToken is available
   useEffect(() => {
     if (!userToken || settings.isDemoMode) return;
 
     const unhydrated = photos.filter(
-      (p) => p.baseUrl && !p.url.startsWith('data:') && !p.url.startsWith('blob:') && !p.url.includes('unsplash.com')
+      (p) =>
+        p.baseUrl &&
+        !p.url.startsWith('data:') &&
+        !p.url.startsWith('blob:') &&
+        !p.url.includes('unsplash.com') &&
+        !(p as any)._hydrationAttempted
     );
 
-    if (unhydrated.length > 0) {
-      let isMounted = true;
-      hydratePhotosWithImages(photos, userToken, (progress) => {
-        if (isMounted) {
-          setPhotosStatus({ success: true, message: progress });
-        }
-      })
-        .then((hydrated) => {
-          if (!isMounted) return;
-          setPhotos(hydrated);
-          savePhotosToIndexedDB(hydrated);
-          saveStoredPickedPhotos(hydrated);
-          const readyCount = hydrated.filter((p) => p.url.startsWith('data:') || p.url.startsWith('blob:')).length;
-          setPhotosStatus({
-            success: true,
-            message: `✓ ${readyCount} Google Photos loaded for slideshow`,
-          });
-        })
-        .catch((err) => {
-          console.warn('Auto-hydration failed:', err);
-        });
+    if (unhydrated.length === 0) return;
 
-      return () => {
-        isMounted = false;
-      };
-    }
+    const batchSig = photos.map((p) => p.id).join(',');
+    if (hydratedBatchRef.current === batchSig) return;
+    hydratedBatchRef.current = batchSig;
+
+    let isMounted = true;
+    hydratePhotosWithImages(photos, userToken, (progress) => {
+      if (isMounted) {
+        setPhotosStatus({ success: true, message: progress });
+      }
+    })
+      .then((hydrated) => {
+        if (!isMounted) return;
+        setPhotos(hydrated);
+        savePhotosToIndexedDB(hydrated);
+        saveStoredPickedPhotos(hydrated);
+        const readyCount = hydrated.filter((p) => p.url.startsWith('data:') || p.url.startsWith('blob:')).length;
+        setPhotosStatus({
+          success: true,
+          message: `✓ ${readyCount} Google Photos loaded for slideshow`,
+        });
+      })
+      .catch((err) => {
+        console.warn('Auto-hydration failed:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [userToken, photos, settings.isDemoMode]);
 
   // Weather fetcher
@@ -498,6 +509,12 @@ export const App: React.FC = () => {
       selectedAlbumId: album.id,
       selectedAlbumName: album.title,
     });
+
+    // If explicit demo album selected, immediately display its photos
+    if (DEMO_PHOTOS[album.id]) {
+      setPhotos(DEMO_PHOTOS[album.id]);
+      return;
+    }
 
     if (userToken && !settings.isDemoMode) {
       const albumPhotos = await fetchAlbumPhotos(userToken, album.id);

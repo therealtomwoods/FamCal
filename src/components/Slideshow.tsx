@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PhotoItem } from '../types';
 import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
-import { downloadPhotoBlob } from '../services/googlePhotos';
 
 interface SlideshowProps {
   photos: PhotoItem[];
@@ -16,7 +15,6 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   albumTitle,
   intervalSeconds,
   onOpenAlbumPicker,
-  userToken,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
@@ -89,7 +87,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   return (
     <div
-      className="relative w-full h-full overflow-hidden select-none bg-black group"
+      className="relative w-full h-full min-h-[200px] overflow-hidden select-none bg-black group"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -115,48 +113,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
           <div
             key={photo.id || idx}
             className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-              isActive ? 'opacity-100 scale-100' : 'opacity-0 scale-105 pointer-events-none'
+              isActive ? 'opacity-100 z-[1]' : 'opacity-0 pointer-events-none z-0'
             }`}
-            style={{
-              transitionProperty: 'opacity, transform',
-              transitionDuration: '1200ms',
-            }}
           >
-            {/* If photo is still awaiting hydration download, show stylish placeholder */}
-            {isUnhydratedGoogle && (
-              <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 flex flex-col items-center justify-center p-6 text-center z-0">
-                <div className="w-14 h-14 rounded-2xl bg-pink-600/10 border border-pink-500/20 flex items-center justify-center mb-3 text-pink-400 animate-pulse">
-                  <Image className="w-7 h-7" />
-                </div>
-                <p className="text-sm font-semibold text-white truncate max-w-xs">{photo.caption || 'Family Photo'}</p>
-                <span className="mt-1 text-[11px] text-pink-300/80 bg-pink-950/60 px-2.5 py-0.5 rounded-full border border-pink-500/30">
-                  Downloading high-res photo...
-                </span>
-              </div>
-            )}
-
             <img
               src={photo.url}
               alt={photo.caption || 'Family photo'}
-              className="w-full h-full object-cover object-center transform transition-transform duration-[10000ms] ease-out scale-105"
+              className="w-full h-full object-cover object-center"
               loading={idx === 0 ? 'eager' : 'lazy'}
-              onError={async (e) => {
+              onError={(e) => {
                 const target = e.currentTarget;
                 if (target.dataset.hasFallback) return;
                 target.dataset.hasFallback = 'true';
-
-                // Attempt on-demand authenticated download if token and baseUrl are available
-                if (photo.baseUrl && userToken) {
-                  try {
-                    const blob = await downloadPhotoBlob(photo.baseUrl, userToken);
-                    if (blob) {
-                      target.src = URL.createObjectURL(blob);
-                      return;
-                    }
-                  } catch {
-                    // ignore and use fallback
-                  }
-                }
 
                 // Fallback to high quality family sample photo so no broken icon ever appears
                 const fallbacks = [
@@ -168,6 +136,16 @@ export const Slideshow: React.FC<SlideshowProps> = ({
                 target.src = fallbacks[idx % fallbacks.length];
               }}
             />
+
+            {/* Subtle corner badge if Google photo is still downloading in background */}
+            {isUnhydratedGoogle && isActive && (
+              <div className="absolute bottom-10 right-4 z-10 pointer-events-none">
+                <span className="text-[10px] text-pink-300 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full border border-pink-500/30 flex items-center gap-1">
+                  <Image className="w-3 h-3 text-pink-400 animate-pulse" />
+                  Loading high-res...
+                </span>
+              </div>
+            )}
           </div>
         );
       })}

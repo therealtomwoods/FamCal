@@ -204,17 +204,17 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 
 /**
  * Download authenticated image bytes from Google Photos baseUrl.
- * Tries direct authenticated fetch, followed by CORS proxy fallbacks with timeout guards.
+ * Tries direct authenticated fetch with size parameters.
  */
 export async function downloadPhotoBlob(baseUrl: string, token: string): Promise<Blob | null> {
   const cleanBase = baseUrl.split('=')[0];
   const targetUrl = `${cleanBase}=w1200-h800`;
 
-  // 1. Direct fetch with Authorization header (standard when browser allows credentials or same-origin)
+  // 1. Direct fetch with Authorization header
   try {
     const res = await fetchWithTimeout(targetUrl, {
       headers: { Authorization: `Bearer ${token}` },
-    }, 7000);
+    }, 5000);
     if (res.ok) {
       const blob = await res.blob();
       if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
@@ -222,47 +222,15 @@ export async function downloadPhotoBlob(baseUrl: string, token: string): Promise
       }
     }
   } catch (err) {
-    console.warn('Direct image fetch blocked by browser CORS, trying proxy fallback...', err);
+    console.warn('Direct photo fetch failed:', err);
   }
 
-  // 2. CORS Proxy with Authorization header override parameter (corsproxy.io)
-  try {
-    const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}&reqHeaders=authorization:${encodeURIComponent(`Bearer ${token}`)}`;
-    const res = await fetchWithTimeout(proxyUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    }, 8000);
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
-        return blob;
-      }
-    }
-  } catch (proxyErr) {
-    console.warn('CORS proxy 1 failed:', proxyErr);
-  }
-
-  // 3. Fallback CORS Proxy (corsproxy.io alternate query syntax)
-  try {
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-    const res = await fetchWithTimeout(proxyUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    }, 8000);
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
-        return blob;
-      }
-    }
-  } catch (proxyErr2) {
-    console.warn('CORS proxy 2 failed:', proxyErr2);
-  }
-
-  // 4. Fallback with original resolution parameter (=d)
+  // 2. Direct fetch with download parameter (=d)
   try {
     const origUrl = `${cleanBase}=d`;
     const res = await fetchWithTimeout(origUrl, {
       headers: { Authorization: `Bearer ${token}` },
-    }, 8000);
+    }, 5000);
     if (res.ok) {
       const blob = await res.blob();
       if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
@@ -270,23 +238,7 @@ export async function downloadPhotoBlob(baseUrl: string, token: string): Promise
       }
     }
   } catch (origErr) {
-    console.warn('Fetch with =d parameter failed:', origErr);
-  }
-
-  // 5. Fallback CORS Proxy (codetabs)
-  try {
-    const codeTabsUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
-    const res = await fetchWithTimeout(codeTabsUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    }, 8000);
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
-        return blob;
-      }
-    }
-  } catch (codeTabsErr) {
-    console.warn('CORS proxy codetabs failed:', codeTabsErr);
+    console.warn('Direct photo =d fetch failed:', origErr);
   }
 
   return null;
@@ -311,7 +263,8 @@ export async function hydratePhotosWithImages(
       p.baseUrl &&
       !p.url.startsWith('data:') &&
       !p.url.startsWith('blob:') &&
-      !p.url.includes('unsplash.com')
+      !p.url.includes('unsplash.com') &&
+      !(p as any)._hydrationAttempted
     ) {
       itemsToHydrate.push({ index: i, photo: { ...p } });
     }
@@ -329,6 +282,7 @@ export async function hydratePhotosWithImages(
     const currentBatch = itemsToHydrate.slice(b, b + batchSize);
     await Promise.all(
       currentBatch.map(async ({ index, photo }) => {
+        (photo as any)._hydrationAttempted = true;
         try {
           const blob = await downloadPhotoBlob(photo.baseUrl!, token);
           if (blob) {
@@ -450,46 +404,56 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
  * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}&pageSize=100&pageToken={token}
  */
 export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
-  const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+  // Google Photos Picker API query param 'sessionId' expects the raw ID (strip sessions/ prefix)
+  const cleanId = sessionId.replace(/^sessions\//, '');
   const allRawItems: PickerMediaItem[] = [];
   let pageToken: string | undefined = undefined;
-  let useFallbackId = false;
+  let idToTry = cleanId;
 
-  do {
+  while (true) {
     const baseUrlStr = 'https://photospicker.googleapis.com/v1/mediaItems';
     const params = new URLSearchParams();
-    const idToUse = useFallbackId ? sessionId.replace(/^sessions\//, '') : sessionPath;
-    params.set('sessionId', idToUse);
+    params.set('sessionId', idToTry);
     params.set('pageSize', '100');
     if (pageToken) {
       params.set('pageToken', pageToken);
     }
 
-    const res = await fetch(`${baseUrlStr}?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    try {
+      const res = await fetch(`${baseUrlStr}?${params.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-    if (!res.ok) {
-      // If the first page request fails with sessionPath, try raw ID fallback
-      if (allRawItems.length === 0 && !useFallbackId) {
-        useFallbackId = true;
-        continue;
+      if (!res.ok) {
+        // If cleanId failed on very first request, try with sessions/ prefix as fallback
+        if (allRawItems.length === 0 && idToTry === cleanId) {
+          const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+          idToTry = sessionPath;
+          continue;
+        }
+        const errText = await res.text();
+        console.warn(`Picker mediaItems fetch error (status ${res.status}):`, errText);
+        break;
       }
-      const errText = await res.text();
-      console.warn('Pagination request failed:', errText);
+
+      const data: { mediaItems?: PickerMediaItem[]; nextPageToken?: string } = await res.json();
+      if (data.mediaItems && data.mediaItems.length > 0) {
+        allRawItems.push(...data.mediaItems);
+      }
+
+      pageToken = data.nextPageToken;
+      if (!pageToken) {
+        break; // All pages traversed
+      }
+    } catch (fetchErr) {
+      console.warn('Network error during picker mediaItems pagination:', fetchErr);
       break;
     }
+  }
 
-    const data: { mediaItems?: PickerMediaItem[]; nextPageToken?: string } = await res.json();
-    if (data.mediaItems && data.mediaItems.length > 0) {
-      allRawItems.push(...data.mediaItems);
-    }
-
-    pageToken = data.nextPageToken;
-  } while (pageToken);
-
+  console.log(`Fetched total ${allRawItems.length} selected items from Google Photos Picker`);
   return mapPickerItems(allRawItems);
 }
 
@@ -838,15 +802,15 @@ function buildAlbumsWithPicked(picked: PhotoItem[]): PhotoAlbum[] {
  * Fetch photos for a specific album or library item
  */
 export async function fetchAlbumPhotos(token: string, albumId: string): Promise<PhotoItem[]> {
-  // If Picked Google Photos
+  // 1. If explicit demo album requested, always return that demo album's photos
+  if (DEMO_PHOTOS[albumId]) {
+    return DEMO_PHOTOS[albumId];
+  }
+
+  // 2. If Picked Google Photos
   if (albumId === 'PICKED_GOOGLE_PHOTOS') {
     const picked = await loadStoredPhotos();
     if (picked.length > 0) return picked;
-  }
-
-  // If demo album id and no token
-  if (!token && DEMO_PHOTOS[albumId]) {
-    return DEMO_PHOTOS[albumId];
   }
 
   // Handle "All Recent Photos from Library"
