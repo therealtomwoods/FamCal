@@ -38,21 +38,21 @@ export const EventCard: React.FC<EventCardProps> = ({ event, militaryTime = fals
         style={{ backgroundColor: event.color || '#3b82f6' }}
       />
 
-      {/* 2. Time Column (Fixed Width, Bold Slate/White) */}
-      <div className="w-24 sm:w-28 flex-shrink-0 pt-0.5">
+      {/* 2. Time Column (Fixed Width, Bold White/Slate) */}
+      <div className="w-28 sm:w-32 flex-shrink-0 pt-0.5">
         <div className="flex items-center gap-1.5">
           {isOngoing && (
             <span
-              className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"
+              className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"
               title="Happening now"
             />
           )}
-          <span className="text-base sm:text-lg font-bold text-slate-300 tracking-tight whitespace-nowrap">
+          <span className="text-lg sm:text-xl font-bold text-white tracking-tight whitespace-nowrap">
             {event.allDay ? 'All Day' : formatTime(event.start)}
           </span>
         </div>
         {!event.allDay && (
-          <span className="text-xs sm:text-sm font-semibold text-slate-500 block leading-tight mt-0.5">
+          <span className="text-sm sm:text-base font-semibold text-slate-400 block leading-tight mt-0.5">
             to {formatTime(event.end)}
           </span>
         )}

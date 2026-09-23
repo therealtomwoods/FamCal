@@ -107,4 +107,5 @@ export interface AppSettings {
   isKioskFramed: boolean; // frame in 9:16 aspect box on wide screens
   isDemoMode: boolean;
   militaryTime: boolean;
+  familyAgendaTitle?: string; // Customizable title for the agenda ribbon e.g. "Family Agenda"
 }

@@ -76,6 +76,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   isKioskFramed: true,
   isDemoMode: false,
   militaryTime: false,
+  familyAgendaTitle: 'Family Agenda',
 };
 
 export const App: React.FC = () => {
@@ -565,6 +566,7 @@ export const App: React.FC = () => {
             calendars={calendars}
             selectedCalendarIds={selectedCalendarIds}
             militaryTime={settings.militaryTime}
+            agendaTitle={settings.familyAgendaTitle || 'Family Agenda'}
             onOpenCalendarFilter={() => setIsCalendarFilterOpen(true)}
             isLoading={isLoadingEvents}
             // IN-LINE WIDGETS IN THE FAMILY AGENDA RIBBON

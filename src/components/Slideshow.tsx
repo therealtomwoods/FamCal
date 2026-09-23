@@ -4,15 +4,32 @@ import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface SlideshowProps {
   photos: PhotoItem[];
-  albumTitle: string;
+  albumTitle?: string;
   intervalSeconds: number;
   onOpenAlbumPicker: () => void;
   userToken?: string | null;
 }
 
+const isFileName = (text?: string, filename?: string): boolean => {
+  if (!text) return false;
+  const trimmed = text.trim();
+  // Suppress common file extensions
+  if (/\.(jpe?g|png|gif|webp|heic|heif|bmp|tiff|raw|cr2|nef|dng|mp4|mov|avi|mkv)$/i.test(trimmed)) {
+    return true;
+  }
+  // Suppress common camera generated prefixes
+  if (/^(IMG_|PXL_|DSC_|VID_|Screenshot_|\d{8}_\d{6})/i.test(trimmed)) {
+    return true;
+  }
+  // Suppress if identical to photo filename
+  if (filename && trimmed.toLowerCase() === filename.trim().toLowerCase()) {
+    return true;
+  }
+  return false;
+};
+
 export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
-  albumTitle,
   intervalSeconds,
   onOpenAlbumPicker,
 }) => {
@@ -156,37 +173,6 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       {/* Bottom gradient scrim blending into the middle / calendar section */}
       <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-slate-950 via-slate-950/70 to-transparent pointer-events-none" />
 
-      {/* Top Album & Counter Header */}
-      <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10">
-        <button
-          onClick={onOpenAlbumPicker}
-          title="Change Album"
-          className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-xs text-white/90 hover:bg-black/75 hover:text-white transition shadow-sm"
-        >
-          <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
-          <span className="max-w-[170px] truncate font-medium">{albumTitle || 'Google Photos'}</span>
-          <span className="text-[10px] text-white/50 ml-1">
-            {currentIndex + 1}/{photos.length}
-          </span>
-        </button>
-
-        <div className="flex items-center gap-1">
-          {/* Subtle dots indicator */}
-          <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/40 backdrop-blur-md border border-white/10">
-            {photos.slice(0, Math.min(6, photos.length)).map((_, i) => (
-              <span
-                key={i}
-                className={`h-1.5 rounded-full transition-all duration-300 ${
-                  i === currentIndex % Math.min(6, photos.length)
-                    ? 'w-4 bg-white'
-                    : 'w-1.5 bg-white/40'
-                }`}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
       {/* Prev / Next controls on hover or touch */}
       {photos.length > 1 && (
         <div
@@ -211,10 +197,10 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         </div>
       )}
 
-      {/* Bottom Photo Metadata (Caption & Date) */}
-      {currentPhoto && (currentPhoto.caption || currentPhoto.dateTaken) && (
+      {/* Bottom Photo Metadata (Caption & Date) - Suppress any raw file names */}
+      {currentPhoto && ((currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename)) || currentPhoto.dateTaken) && (
         <div className="absolute bottom-3 left-4 right-4 z-10 pointer-events-none">
-          {currentPhoto.caption && (
+          {currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename) && (
             <p className="text-xs sm:text-sm font-medium text-white/95 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] line-clamp-1">
               {currentPhoto.caption}
             </p>

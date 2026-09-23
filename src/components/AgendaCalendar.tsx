@@ -13,6 +13,7 @@ interface AgendaCalendarProps {
   militaryTime?: boolean;
   onOpenCalendarFilter: () => void;
   isLoading?: boolean;
+  agendaTitle?: string;
   // In-line Ribbon Widgets
   weather?: WeatherData | null;
   stock?: StockItem | null;
@@ -31,6 +32,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   militaryTime = false,
   onOpenCalendarFilter,
   isLoading = false,
+  agendaTitle = 'Family Agenda',
   weather = null,
   stock = null,
   thermostat = null,
@@ -132,21 +134,21 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
       {/* ========================================================================= */}
       {/* IN-LINE FAMILY AGENDA HEADER & STATUS RIBBON */}
       {/* ========================================================================= */}
-      <div className="flex-shrink-0 px-3 py-2 bg-black border-b border-white/10 backdrop-blur-md z-10 select-none">
-        <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+      <div className="flex-shrink-0 px-3 sm:px-4 py-3 sm:py-3.5 bg-black border-b border-white/15 backdrop-blur-md z-10 select-none">
+        <div className="flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
           {/* Left: Family Agenda Title */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <CalendarIcon className="w-4 h-4 text-blue-400" />
-            <h2 className="text-sm sm:text-base font-bold text-white tracking-wide whitespace-nowrap">
-              Family Agenda
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <CalendarIcon className="w-5 h-5 text-blue-400" />
+            <h2 className="text-base sm:text-lg font-extrabold text-white tracking-wide whitespace-nowrap">
+              {agendaTitle || 'Family Agenda'}
             </h2>
-            <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 font-semibold border border-white/5">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-bold border border-white/10">
               {events.length}
             </span>
           </div>
 
           {/* Center: In-Line Widgets (Weather, Live Stock, Nest) */}
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2.5 flex-shrink-0">
             {showWeather && (
               <WeatherWidget weather={weather} units={weatherUnits} />
             )}
@@ -166,12 +168,12 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
           {/* Right: Calendars Filter Button */}
           <button
             onClick={onOpenCalendarFilter}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/10 text-xs font-semibold text-white transition shadow-sm flex-shrink-0"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-xs sm:text-sm font-semibold text-white transition shadow-sm flex-shrink-0"
             title="Filter Active Calendars"
           >
-            <Filter className="w-3.5 h-3.5 text-blue-400" />
+            <Filter className="w-4 h-4 text-blue-400" />
             <span className="hidden sm:inline">Calendars</span>
-            <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px]">
+            <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-xs font-bold">
               {activeCalendars.length}
             </span>
           </button>

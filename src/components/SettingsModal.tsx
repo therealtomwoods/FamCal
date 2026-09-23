@@ -65,6 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
   const [nestProjectIdInput, setNestProjectIdInput] = useState(settings.nestProjectId || '');
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
+  const [agendaTitleInput, setAgendaTitleInput] = useState(settings.familyAgendaTitle || 'Family Agenda');
   const [activeTab, setActiveTab] = useState<'google' | 'widgets' | 'general'>('google');
   const [showSavedToast, setShowSavedToast] = useState(false);
 
@@ -75,6 +76,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       googleClientId: clientIdInput.trim(),
       nestProjectId: nestProjectIdInput.trim(),
       monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
+      familyAgendaTitle: agendaTitleInput.trim() || 'Family Agenda',
     });
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 2000);
@@ -654,6 +656,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* ========================================================================= */}
           {activeTab === 'general' && (
             <div className="space-y-4">
+              {/* Family Agenda Title / Family Name Customization */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2">
+                <div>
+                  <p className="font-bold text-white">Family Calendar Ribbon Title</p>
+                  <p className="text-xs text-slate-400">
+                    Personalize the title banner on your calendar ribbon (e.g. &ldquo;Woods Family Agenda&rdquo;, &ldquo;Home Command Center&rdquo;)
+                  </p>
+                </div>
+                <div className="flex gap-2 mt-1">
+                  <input
+                    type="text"
+                    value={agendaTitleInput}
+                    onChange={(e) => setAgendaTitleInput(e.target.value)}
+                    onBlur={() => {
+                      const val = agendaTitleInput.trim() || 'Family Agenda';
+                      onUpdateSettings({ familyAgendaTitle: val });
+                    }}
+                    placeholder="Family Agenda"
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={() => {
+                      const val = agendaTitleInput.trim() || 'Family Agenda';
+                      setAgendaTitleInput(val);
+                      onUpdateSettings({ familyAgendaTitle: val });
+                      setShowSavedToast(true);
+                      setTimeout(() => setShowSavedToast(false), 2000);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+
               {/* Demo Mode Toggle */}
               <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 flex items-center justify-between">
                 <div>

@@ -17,10 +17,10 @@ export const NestThermostatWidget: React.FC<NestThermostatWidgetProps> = ({
   const isHeating = thermostat.mode === 'heat' || thermostat.status === 'heating';
 
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/80 border border-white/10 text-white select-none flex-shrink-0">
+    <div className="flex items-center gap-2.5 px-3.5 py-2 sm:py-2.5 rounded-xl bg-slate-900/90 border border-white/15 text-white select-none flex-shrink-0 shadow-md">
       {/* Mode Icon */}
       <div
-        className={`p-1.5 rounded-lg flex items-center justify-center ${
+        className={`p-2 rounded-xl flex items-center justify-center ${
           isCooling
             ? 'bg-sky-500/20 text-sky-400'
             : isHeating
@@ -29,52 +29,52 @@ export const NestThermostatWidget: React.FC<NestThermostatWidgetProps> = ({
         }`}
       >
         {isCooling ? (
-          <Snowflake className="w-4 h-4 animate-spin-slow" />
+          <Snowflake className="w-5 h-5 animate-spin-slow" />
         ) : isHeating ? (
-          <Flame className="w-4 h-4" />
+          <Flame className="w-5 h-5" />
         ) : (
-          <Leaf className="w-4 h-4" />
+          <Leaf className="w-5 h-5" />
         )}
       </div>
 
       {/* Temp Display */}
       <div className="flex flex-col">
         <div className="flex items-baseline gap-1">
-          <span className="text-base sm:text-lg font-black tracking-tight leading-none text-white">
+          <span className="text-xl sm:text-2xl font-black tracking-tight leading-none text-white">
             {thermostat.currentTemp}°
           </span>
-          <span className="text-[10px] text-slate-400 font-medium">
+          <span className="text-xs text-slate-400 font-medium">
             Set {thermostat.targetTemp}°
           </span>
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-slate-300 leading-tight mt-0.5">
+        <div className="flex items-center gap-1.5 text-xs text-slate-300 leading-tight mt-1">
           <span className="capitalize font-semibold text-sky-300">
             {thermostat.status === 'idle' ? 'Idle' : thermostat.status}
           </span>
           <span className="text-slate-500">•</span>
           <span className="text-slate-400">{thermostat.humidity}% RH</span>
           {thermostat.isRealDevice && (
-            <span title="Connected to Google Nest"><CheckCircle2 className="w-2.5 h-2.5 text-emerald-400 ml-0.5" /></span>
+            <span title="Connected to Google Nest"><CheckCircle2 className="w-3 h-3 text-emerald-400 ml-0.5" /></span>
           )}
         </div>
       </div>
 
       {/* Target Setpoint Controls */}
       {onAdjustTemp && (
-        <div className="flex flex-col gap-0.5 ml-0.5">
+        <div className="flex flex-col gap-0.5 ml-1">
           <button
             onClick={() => onAdjustTemp(1)}
-            className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
+            className="p-1 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
             title="Increase Target Temperature"
           >
-            <ChevronUp className="w-3.5 h-3.5" />
+            <ChevronUp className="w-4 h-4" />
           </button>
           <button
             onClick={() => onAdjustTemp(-1)}
-            className="p-0.5 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
+            className="p-1 hover:bg-white/10 rounded text-slate-400 hover:text-white transition"
             title="Decrease Target Temperature"
           >
-            <ChevronDown className="w-3.5 h-3.5" />
+            <ChevronDown className="w-4 h-4" />
           </button>
         </div>
       )}

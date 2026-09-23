@@ -35,51 +35,51 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({ weather, units = '
   const forecastDays = weather.forecast?.slice(0, 4) || [];
 
   return (
-    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-900/85 border border-white/10 text-white select-none flex-shrink-0 shadow-sm backdrop-blur-md">
+    <div className="flex items-center gap-3 px-3.5 py-2 sm:py-2.5 rounded-xl bg-slate-900/90 border border-white/15 text-white select-none flex-shrink-0 shadow-md backdrop-blur-md">
       {/* Today's Current Weather */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2.5">
         <div className="flex-shrink-0">
-          {renderWeatherIcon(weather.icon, 'w-6 h-6')}
+          {renderWeatherIcon(weather.icon, 'w-7 h-7 sm:w-8 sm:h-8')}
         </div>
         <div className="flex flex-col">
           <div className="flex items-baseline gap-1">
-            <span className="text-base sm:text-lg font-black tracking-tight leading-none text-white">
+            <span className="text-xl sm:text-2xl font-black tracking-tight leading-none text-white">
               {weather.temp}°
             </span>
-            <span className="text-[10px] font-semibold text-slate-400">
+            <span className="text-xs font-semibold text-slate-400">
               {units}
             </span>
-            <span className="text-[10px] font-medium text-slate-400 ml-1">
+            <span className="text-xs font-medium text-slate-400 ml-1">
               Today
             </span>
           </div>
-          <div className="flex items-center gap-1 text-[10px] text-slate-300 leading-tight mt-0.5">
-            <span className="truncate max-w-[85px] font-medium">{weather.city}</span>
+          <div className="flex items-center gap-1.5 text-xs text-slate-300 leading-tight mt-1">
+            <span className="truncate max-w-[100px] font-semibold text-slate-200">{weather.city}</span>
             <span className="text-slate-500">•</span>
-            <span className="text-slate-400">H:{weather.high}° L:{weather.low}°</span>
+            <span className="text-slate-300 font-medium">H:{weather.high}° L:{weather.low}°</span>
           </div>
         </div>
       </div>
 
       {/* Next 4-Day Outlook */}
       {forecastDays.length > 0 && (
-        <div className="flex items-center gap-1.5 pl-2.5 border-l border-white/15">
+        <div className="flex items-center gap-2 pl-3 border-l border-white/15">
           {forecastDays.map((day, idx) => (
             <div
               key={day.date || idx}
               title={`${day.dayName}: ${day.condition}, High ${day.tempMax}°, Low ${day.tempMin}°`}
-              className="flex flex-col items-center justify-center px-1.5 py-0.5 rounded-lg bg-slate-800/40 hover:bg-slate-800/80 transition"
+              className="flex flex-col items-center justify-center px-2 py-1 rounded-lg bg-slate-800/60 hover:bg-slate-800/90 transition"
             >
-              <span className="text-[9px] font-bold text-slate-300 uppercase tracking-wider">
+              <span className="text-[10px] sm:text-[11px] font-bold text-slate-300 uppercase tracking-wider">
                 {day.dayName}
               </span>
-              <div className="my-0.5">
-                {renderWeatherIcon(day.icon, 'w-3.5 h-3.5')}
+              <div className="my-1">
+                {renderWeatherIcon(day.icon, 'w-4 h-4 sm:w-4.5 sm:h-4.5')}
               </div>
-              <div className="flex items-center gap-0.5 text-[10px] leading-none">
+              <div className="flex items-center gap-0.5 text-xs leading-none">
                 <span className="font-bold text-white">{day.tempMax}°</span>
-                <span className="text-slate-500 text-[8px]">/</span>
-                <span className="text-slate-400">{day.tempMin}°</span>
+                <span className="text-slate-500 text-[10px]">/</span>
+                <span className="text-slate-300 font-medium">{day.tempMin}°</span>
               </div>
             </div>
           ))}

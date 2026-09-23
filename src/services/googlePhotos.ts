@@ -390,7 +390,7 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
         url: `${baseUrl}=w1200-h800`,
         baseUrl: baseUrl,
         filename: filename,
-        caption: filename,
+        caption: undefined,
         width: typeof width === 'number' ? width : undefined,
         height: typeof height === 'number' ? height : undefined,
       };
@@ -888,7 +888,7 @@ function mapMediaItemsToPhotos(items: NonNullable<GPhotosMediaSearchResponse['me
       url: highResUrl,
       baseUrl: item.baseUrl,
       filename: item.filename,
-      caption: item.description || item.filename,
+      caption: item.description || undefined,
       dateTaken: dateString,
       width: item.mediaMetadata?.width ? parseInt(item.mediaMetadata.width, 10) : undefined,
       height: item.mediaMetadata?.height ? parseInt(item.mediaMetadata.height, 10) : undefined,
