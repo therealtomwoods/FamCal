@@ -537,9 +537,9 @@ export const App: React.FC = () => {
         }`}
       >
         {/* ========================================================= */}
-        {/* TOP 1/3: PHOTO SLIDESHOW (with LARGE CLOCK in top-right) */}
+        {/* TOP 45%: PHOTO SLIDESHOW (with LARGE CLOCK in top-right)  */}
         {/* ========================================================= */}
-        <div className="relative w-full h-[33%] flex-shrink-0 overflow-hidden bg-black">
+        <div className="relative w-full h-[45%] flex-shrink-0 overflow-hidden bg-black">
           <Slideshow
             photos={photos}
             albumTitle={settings.selectedAlbumName || 'Google Photos'}
@@ -557,9 +557,9 @@ export const App: React.FC = () => {
         </div>
 
         {/* ========================================================= */}
-        {/* BOTTOM 2/3: AGENDA CALENDAR DISPLAY WITH IN-LINE RIBBON   */}
+        {/* BOTTOM 55%: AGENDA CALENDAR DISPLAY WITH IN-LINE RIBBON   */}
         {/* ========================================================= */}
-        <div className="flex-1 w-full overflow-hidden flex flex-col bg-slate-950">
+        <div className="flex-1 w-full overflow-hidden flex flex-col bg-black">
           <AgendaCalendar
             events={events}
             calendars={calendars}

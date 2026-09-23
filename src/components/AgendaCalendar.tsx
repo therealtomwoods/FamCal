@@ -4,7 +4,7 @@ import { EventCard } from './EventCard';
 import { WeatherWidget } from './WeatherWidget';
 import { StockTickerWidget } from './StockTickerWidget';
 import { NestThermostatWidget } from './NestThermostatWidget';
-import { Calendar as CalendarIcon, Filter, CheckCircle2, Sparkles } from 'lucide-react';
+import { Calendar as CalendarIcon, Filter, CheckCircle2 } from 'lucide-react';
 
 interface AgendaCalendarProps {
   events: CalendarEvent[];
@@ -78,10 +78,12 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
 
     const weekday = dateObj.toLocaleDateString(undefined, { weekday: 'long' });
     const monthName = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const dayNumber = String(day);
 
     if (dateKey === todayKey) {
       return {
-        badge: 'TODAY',
+        dayNumber,
+        label: 'Today',
         weekday,
         dateFormatted: monthName,
         isToday: true,
@@ -89,14 +91,16 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     }
     if (dateKey === tomorrowKey) {
       return {
-        badge: 'TOMORROW',
+        dayNumber,
+        label: 'Tomorrow',
         weekday,
         dateFormatted: monthName,
         isToday: false,
       };
     }
     return {
-      badge: weekday.toUpperCase(),
+      dayNumber,
+      label: weekday,
       weekday,
       dateFormatted: monthName,
       isToday: false,
@@ -106,11 +110,11 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   const activeCalendars = calendars.filter((c) => selectedCalendarIds.includes(c.id));
 
   return (
-    <div className="flex flex-col h-full bg-slate-950/95 overflow-hidden">
+    <div className="flex flex-col h-full bg-black overflow-hidden">
       {/* ========================================================================= */}
       {/* IN-LINE FAMILY AGENDA HEADER & STATUS RIBBON */}
       {/* ========================================================================= */}
-      <div className="flex-shrink-0 px-3 py-2 bg-gradient-to-r from-slate-900/95 via-slate-900/90 to-slate-950/95 border-b border-white/10 backdrop-blur-md z-10 select-none shadow-md">
+      <div className="flex-shrink-0 px-3 py-2 bg-black border-b border-white/10 backdrop-blur-md z-10 select-none">
         <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
           {/* Left: Family Agenda Title */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -157,11 +161,11 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
       </div>
 
       {/* Active Calendars Quick Color Pills */}
-      <div className="flex-shrink-0 px-4 py-1.5 bg-slate-950 border-b border-white/5 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+      <div className="flex-shrink-0 px-4 py-1.5 bg-black border-b border-white/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
         {activeCalendars.map((cal) => (
           <span
             key={cal.id}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-900 border border-white/5 text-slate-300 flex-shrink-0"
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-white/5 border border-white/10 text-slate-300 flex-shrink-0"
           >
             <span
               className="w-2 h-2 rounded-full"
@@ -173,7 +177,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
       </div>
 
       {/* Agenda Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 space-y-5">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black">
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-16 text-slate-400">
             <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
@@ -190,39 +194,40 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
         ) : (
           sortedDateKeys.map((dateKey) => {
             const dayEvents = groupedEvents[dateKey] || [];
-            const { badge, weekday, dateFormatted, isToday } = formatHeaderDate(dateKey);
+            const { dayNumber, label, weekday, dateFormatted, isToday } = formatHeaderDate(dateKey);
 
             return (
-              <div key={dateKey} className="space-y-2">
-                {/* Day Header */}
-                <div className="sticky top-0 z-10 flex items-center justify-between py-1 px-2 rounded-lg bg-slate-950/90 backdrop-blur-md border-b border-white/10">
-                  <div className="flex items-center gap-2">
+              <div key={dateKey} className="space-y-1">
+                {/* Day Header - Clean White on Black */}
+                <div className="sticky top-0 z-10 flex items-baseline justify-between pt-3 pb-2 px-1 bg-black/95 backdrop-blur-md border-b border-white/15">
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                      {dayNumber}
+                    </span>
                     <span
-                      className={`text-xs font-extrabold px-2 py-0.5 rounded-md tracking-wider uppercase ${
-                        isToday
-                          ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
-                          : 'bg-slate-800 text-slate-300'
+                      className={`text-lg sm:text-xl font-bold tracking-tight ${
+                        isToday ? 'text-white' : 'text-slate-300'
                       }`}
                     >
-                      {badge}
+                      {label}
                     </span>
-                    <span className="text-sm font-bold text-white">{weekday},</span>
-                    <span className="text-sm font-medium text-slate-400">{dateFormatted}</span>
+                    <span className="text-xs sm:text-sm font-medium text-slate-500 ml-1">
+                      {isToday ? `${weekday}, ${dateFormatted}` : dateFormatted}
+                    </span>
                   </div>
 
-                  <span className="text-xs font-semibold text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500">
                     {dayEvents.length} {dayEvents.length === 1 ? 'event' : 'events'}
                   </span>
                 </div>
 
                 {/* Day Events or Empty State */}
                 {dayEvents.length === 0 ? (
-                  <div className="p-3 rounded-xl bg-slate-900/40 border border-white/5 flex items-center gap-2 text-slate-400 text-xs">
-                    <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                    <span>Nothing scheduled yet for this day. Free time for the family!</span>
+                  <div className="py-3 px-2 text-slate-500 text-xs sm:text-sm font-medium italic">
+                    No events scheduled
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-0.5">
                     {dayEvents.map((evt) => (
                       <EventCard key={evt.id} event={evt} militaryTime={militaryTime} />
                     ))}
