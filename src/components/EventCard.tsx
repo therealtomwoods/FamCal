@@ -31,19 +31,19 @@ export const EventCard: React.FC<EventCardProps> = ({ event, militaryTime = fals
   };
 
   return (
-    <div className="flex items-start gap-3.5 sm:gap-4 py-3 sm:py-3.5 px-1 border-b border-white/10 hover:bg-white/[0.03] transition-colors group">
+    <div className="flex items-start py-3 sm:py-3.5 px-1 border-b border-white/10 hover:bg-white/[0.03] transition-colors group">
       {/* 1. Left Vertical Colored Bar */}
       <div
-        className="w-2 sm:w-2.5 self-stretch min-h-[36px] rounded-full flex-shrink-0"
+        className="w-2 sm:w-2.5 self-stretch min-h-[36px] rounded-full flex-shrink-0 mr-3.5 sm:mr-4"
         style={{ backgroundColor: event.color || '#3b82f6' }}
       />
 
       {/* 2. Time Column (Fixed Width, Bold White/Slate) */}
-      <div className="w-28 sm:w-32 flex-shrink-0 pt-0.5">
-        <div className="flex items-center gap-1.5">
+      <div className="w-28 sm:w-32 flex-shrink-0 pt-0.5 mr-3.5 sm:mr-4">
+        <div className="flex items-center">
           {isOngoing && (
             <span
-              className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"
+              className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 mr-2"
               title="Happening now"
             />
           )}

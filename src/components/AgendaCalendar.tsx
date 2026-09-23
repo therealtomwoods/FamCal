@@ -206,18 +206,18 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
               <div key={dateKey} className="space-y-1">
                 {/* Day Header - Clean White on Black */}
                 <div className="sticky top-0 z-10 flex items-baseline justify-between pt-3 pb-2 px-1 bg-black/95 backdrop-blur-md border-b border-white/15">
-                  <div className="flex items-baseline gap-2.5">
-                    <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                  <div className="flex items-baseline">
+                    <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mr-4 sm:mr-5">
                       {dayNumber}
                     </span>
                     <span
-                      className={`text-lg sm:text-xl font-bold tracking-tight ${
+                      className={`text-lg sm:text-xl font-bold tracking-tight mr-3 ${
                         isToday ? 'text-white' : 'text-slate-300'
                       }`}
                     >
                       {label}
                     </span>
-                    <span className="text-xs sm:text-sm font-medium text-slate-500 ml-1">
+                    <span className="text-xs sm:text-sm font-medium text-slate-500">
                       {isToday ? `${weekday}, ${dateFormatted}` : dateFormatted}
                     </span>
                   </div>
