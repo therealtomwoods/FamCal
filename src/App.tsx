@@ -201,25 +201,23 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // 2. Proactive fix for users who saved a custom city name previously but still had SF coordinates
+  // 2. Proactive fix: always ensure weatherLat/weatherLon accurately match weatherLocation
   useEffect(() => {
-    const isCustomCityWithOldSfCoords =
-      settings.weatherLocation &&
-      !settings.weatherLocation.toLowerCase().includes('san francisco') &&
-      Math.abs(settings.weatherLat - 37.7749) < 0.001 &&
-      Math.abs(settings.weatherLon - (-122.4194)) < 0.001;
-
-    if (isCustomCityWithOldSfCoords) {
-      geocodeLocation(settings.weatherLocation).then((geo) => {
-        if (geo) {
+    if (!settings.weatherLocation) return;
+    geocodeLocation(settings.weatherLocation).then((geo) => {
+      if (geo) {
+        if (
+          Math.abs(settings.weatherLat - geo.lat) > 0.01 ||
+          Math.abs(settings.weatherLon - geo.lon) > 0.01
+        ) {
           updateSettings({
             weatherLat: geo.lat,
             weatherLon: geo.lon,
           });
         }
-      });
-    }
-  }, [settings.weatherLocation]);
+      }
+    });
+  }, [settings.weatherLocation, settings.weatherLat, settings.weatherLon]);
 
   // Weather fetcher
   useEffect(() => {

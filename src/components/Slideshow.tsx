@@ -219,7 +219,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
           >
             <img
               src={displaySrc}
-              alt={photo.caption || photo.filename || 'Family photo'}
+              alt={photo.caption && !isFileName(photo.caption, photo.filename) ? photo.caption : 'Family photo'}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center"
               loading={idx === 0 ? 'eager' : 'lazy'}
@@ -234,7 +234,9 @@ export const Slideshow: React.FC<SlideshowProps> = ({
                 </div>
                 <p className="text-sm font-semibold text-white/90">Family Memories</p>
                 <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
-                  {photo.filename || 'Connecting to Google Photos...'}
+                  {photo.caption && !isFileName(photo.caption, photo.filename)
+                    ? photo.caption
+                    : 'Connecting to Google Photos...'}
                 </p>
               </div>
             )}

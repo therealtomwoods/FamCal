@@ -204,20 +204,34 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
 
             return (
               <div key={dateKey} className="space-y-1">
-                {/* Day Header - Clean White on Black */}
+                {/* Day Header - Clean White on Black with generous uncrowded spacing */}
                 <div className="sticky top-0 z-10 flex items-baseline justify-between pt-3 pb-2 px-1 bg-black/95 backdrop-blur-md border-b border-white/15">
                   <div className="flex items-baseline">
-                    <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mr-4 sm:mr-5">
+                    <span
+                      className="text-2xl sm:text-3xl font-black text-white tracking-normal inline-block mr-5 sm:mr-6"
+                      style={{
+                        minWidth: '42px',
+                        marginRight: '22px',
+                        display: 'inline-block',
+                      }}
+                    >
                       {dayNumber}
                     </span>
                     <span
-                      className={`text-lg sm:text-xl font-bold tracking-tight mr-3 ${
-                        isToday ? 'text-white' : 'text-slate-300'
+                      className={`text-lg sm:text-xl font-bold tracking-tight inline-block mr-4 sm:mr-5 ${
+                        isToday ? 'text-white' : 'text-slate-200'
                       }`}
+                      style={{
+                        marginRight: '18px',
+                        display: 'inline-block',
+                      }}
                     >
                       {label}
                     </span>
-                    <span className="text-xs sm:text-sm font-medium text-slate-500">
+                    <span
+                      className="text-xs sm:text-sm font-medium text-slate-400 inline-block"
+                      style={{ display: 'inline-block' }}
+                    >
                       {isToday ? `${weekday}, ${dateFormatted}` : dateFormatted}
                     </span>
                   </div>

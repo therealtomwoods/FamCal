@@ -94,13 +94,46 @@ const BUILTIN_CITIES: Record<string, { name: string; lat: number; lon: number }>
   'plano': { name: 'Plano, TX', lat: 33.0198, lon: -96.6989 },
   'irvine': { name: 'Irvine, CA', lat: 33.6846, lon: -117.8265 },
 
+  // Canada & Ontario Regional Centres
+  'elora': { name: 'Elora, Ontario', lat: 43.6834, lon: -80.4329 },
+  'elora, ontario': { name: 'Elora, Ontario', lat: 43.6834, lon: -80.4329 },
+  'elora, on': { name: 'Elora, Ontario', lat: 43.6834, lon: -80.4329 },
+  'fergus': { name: 'Fergus, Ontario', lat: 43.7042, lon: -80.3774 },
+  'fergus, ontario': { name: 'Fergus, Ontario', lat: 43.7042, lon: -80.3774 },
+  'fergus, on': { name: 'Fergus, Ontario', lat: 43.7042, lon: -80.3774 },
+  'centre wellington': { name: 'Centre Wellington, Ontario', lat: 43.7001, lon: -80.4000 },
+  'centre wellington, ontario': { name: 'Centre Wellington, Ontario', lat: 43.7001, lon: -80.4000 },
+  'guelph': { name: 'Guelph, Ontario', lat: 43.5448, lon: -80.2482 },
+  'guelph, ontario': { name: 'Guelph, Ontario', lat: 43.5448, lon: -80.2482 },
+  'guelph, on': { name: 'Guelph, Ontario', lat: 43.5448, lon: -80.2482 },
+  'kitchener': { name: 'Kitchener, Ontario', lat: 43.4516, lon: -80.4925 },
+  'kitchener, ontario': { name: 'Kitchener, Ontario', lat: 43.4516, lon: -80.4925 },
+  'waterloo': { name: 'Waterloo, Ontario', lat: 43.4643, lon: -80.5204 },
+  'waterloo, ontario': { name: 'Waterloo, Ontario', lat: 43.4643, lon: -80.5204 },
+  'cambridge': { name: 'Cambridge, Ontario', lat: 43.3616, lon: -80.3144 },
+  'cambridge, ontario': { name: 'Cambridge, Ontario', lat: 43.3616, lon: -80.3144 },
+  'hamilton': { name: 'Hamilton, Ontario', lat: 43.2557, lon: -79.8711 },
+  'hamilton, ontario': { name: 'Hamilton, Ontario', lat: 43.2557, lon: -79.8711 },
+  'london, on': { name: 'London, Ontario', lat: 42.9849, lon: -81.2453 },
+  'london, ontario': { name: 'London, Ontario', lat: 42.9849, lon: -81.2453 },
+  'mississauga': { name: 'Mississauga, Ontario', lat: 43.5890, lon: -79.6441 },
+  'brampton': { name: 'Brampton, Ontario', lat: 43.7315, lon: -79.7624 },
+  'markham': { name: 'Markham, Ontario', lat: 43.8561, lon: -79.3370 },
+  'vaughan': { name: 'Vaughan, Ontario', lat: 43.8563, lon: -79.5085 },
+  'barrie': { name: 'Barrie, Ontario', lat: 44.3894, lon: -79.6903 },
+  'ottawa': { name: 'Ottawa, Ontario', lat: 45.4215, lon: -75.6972 },
+  'ottawa, ontario': { name: 'Ottawa, Ontario', lat: 45.4215, lon: -75.6972 },
+  'toronto': { name: 'Toronto, Ontario', lat: 43.6532, lon: -79.3832 },
+  'toronto, ontario': { name: 'Toronto, Ontario', lat: 43.6532, lon: -79.3832 },
+  'toronto, on': { name: 'Toronto, Ontario', lat: 43.6532, lon: -79.3832 },
+  'vancouver': { name: 'Vancouver, BC', lat: 49.2827, lon: -123.1207 },
+  'montreal': { name: 'Montreal, QC', lat: 45.5017, lon: -73.5673 },
+  'calgary': { name: 'Calgary, AB', lat: 51.0447, lon: -114.0719 },
+  'edmonton': { name: 'Edmonton, AB', lat: 53.5461, lon: -113.4938 },
+
   // International Cities
   'london': { name: 'London, UK', lat: 51.5074, lon: -0.1278 },
   'paris': { name: 'Paris, FR', lat: 48.8566, lon: 2.3522 },
-  'toronto': { name: 'Toronto, CA', lat: 43.6532, lon: -79.3832 },
-  'vancouver': { name: 'Vancouver, CA', lat: 49.2827, lon: -123.1207 },
-  'montreal': { name: 'Montreal, CA', lat: 45.5017, lon: -73.5673 },
-  'calgary': { name: 'Calgary, CA', lat: 51.0447, lon: -114.0719 },
   'sydney': { name: 'Sydney, AU', lat: -33.8688, lon: 151.2093 },
   'melbourne': { name: 'Melbourne, AU', lat: -37.8136, lon: 144.9631 },
   'brisbane': { name: 'Brisbane, AU', lat: -27.4698, lon: 153.0251 },
@@ -150,34 +183,73 @@ export async function geocodeLocation(query: string): Promise<GeocodeResult | nu
   const directCoord = parseDirectCoordinates(clean);
   if (directCoord) return directCoord;
 
-  // 2. Check local offline dictionary first (instant & infallible)
-  const normalized = clean.toLowerCase().replace(/,\s*[a-z]{2}(\s+usa|\s+us)?$/i, '').trim();
-  if (BUILTIN_CITIES[normalized]) {
-    return BUILTIN_CITIES[normalized];
-  }
-  // Also check exact key match
+  // 2. Check local offline dictionary first (instant, infallible & zero latency)
   const cleanLower = clean.toLowerCase();
+  const normalized = cleanLower
+    .replace(/,\s*[a-z]{2,}(\s+usa|\s+us|\s+ca|\s+canada)?$/i, '')
+    .trim();
+
   if (BUILTIN_CITIES[cleanLower]) {
     return BUILTIN_CITIES[cleanLower];
   }
+  if (BUILTIN_CITIES[normalized]) {
+    return BUILTIN_CITIES[normalized];
+  }
+
+  // Check dictionary keys for partial match
+  for (const [key, cityInfo] of Object.entries(BUILTIN_CITIES)) {
+    if (key === cleanLower || key === normalized) {
+      return cityInfo;
+    }
+  }
 
   // 3. Online Geocoding via Open-Meteo Geocoding API
+  // Open-Meteo search fails if the query contains commas/state like "Elora, Ontario".
+  // Extract place name (before comma) and optional region/state qualifier
+  const parts = clean.split(',').map((p) => p.trim());
+  const placeName = parts[0];
+  const regionFilter = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
+
   try {
-    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
-      clean
-    )}&count=5&language=en&format=json`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.results && data.results.length > 0) {
-        const top = data.results[0];
-        const stateOrCountry = top.admin1 || top.country || '';
-        const displayName = stateOrCountry ? `${top.name}, ${stateOrCountry}` : top.name;
-        return {
-          name: displayName,
-          lat: top.latitude,
-          lon: top.longitude,
-        };
+    const searchTerms = [placeName];
+    if (placeName !== clean) searchTerms.push(clean);
+
+    for (const term of searchTerms) {
+      const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+        term
+      )}&count=10&language=en&format=json`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.results && data.results.length > 0) {
+          let matched = data.results[0];
+
+          // If a region/province filter was provided (e.g. "Ontario", "ON", "Canada")
+          if (regionFilter) {
+            const found = data.results.find((r: any) => {
+              const admin = (r.admin1 || '').toLowerCase();
+              const country = (r.country || '').toLowerCase();
+              const cc = (r.country_code || '').toLowerCase();
+              return (
+                admin.includes(regionFilter) ||
+                country.includes(regionFilter) ||
+                cc === regionFilter ||
+                (regionFilter === 'on' && admin === 'ontario') ||
+                (regionFilter === 'ontario' && admin === 'ontario') ||
+                (regionFilter === 'ca' && country === 'canada')
+              );
+            });
+            if (found) matched = found;
+          }
+
+          const stateOrCountry = matched.admin1 || matched.country || '';
+          const displayName = stateOrCountry ? `${matched.name}, ${stateOrCountry}` : matched.name;
+          return {
+            name: displayName,
+            lat: matched.latitude,
+            lon: matched.longitude,
+          };
+        }
       }
     }
   } catch (err) {
@@ -196,9 +268,8 @@ export async function geocodeLocation(query: string): Promise<GeocodeResult | nu
       const data = await res.json();
       if (data && data.length > 0) {
         const top = data[0];
-        // Shorten long display name to City, State/Country
-        const parts = (top.display_name || '').split(', ');
-        const shortName = parts.length > 2 ? `${parts[0]}, ${parts[parts.length - 1]}` : top.display_name;
+        const partsName = (top.display_name || '').split(', ');
+        const shortName = partsName.length > 2 ? `${partsName[0]}, ${partsName[partsName.length - 1]}` : top.display_name;
         return {
           name: shortName || clean,
           lat: parseFloat(top.lat),
@@ -285,15 +356,18 @@ export async function detectBrowserLocation(): Promise<{
   });
 }
 
-const WEATHER_CACHE_KEY = 'famcal_live_weather_cache';
+const WEATHER_CACHE_PREFIX = 'famcal_live_weather_v2';
 
-function getStoredWeatherCache(): WeatherData | null {
+function getStoredWeatherCache(lat: number, lon: number, units: 'F' | 'C'): WeatherData | null {
   try {
-    const raw = localStorage.getItem(WEATHER_CACHE_KEY);
+    // Purge old unversioned/unisolated cache
+    localStorage.removeItem('famcal_live_weather_cache');
+    const key = `${WEATHER_CACHE_PREFIX}_${lat.toFixed(2)}_${lon.toFixed(2)}_${units}`;
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    // Cache valid for up to 3 hours
-    if (parsed && parsed.timestamp && Date.now() - parsed.timestamp < 3 * 3600 * 1000) {
+    // Cache valid for up to 30 minutes
+    if (parsed && parsed.timestamp && Date.now() - parsed.timestamp < 30 * 60 * 1000) {
       return parsed.data as WeatherData;
     }
     return (parsed?.data as WeatherData) || null;
@@ -302,10 +376,11 @@ function getStoredWeatherCache(): WeatherData | null {
   }
 }
 
-function setStoredWeatherCache(data: WeatherData) {
+function setStoredWeatherCache(lat: number, lon: number, units: 'F' | 'C', data: WeatherData) {
   try {
+    const key = `${WEATHER_CACHE_PREFIX}_${lat.toFixed(2)}_${lon.toFixed(2)}_${units}`;
     localStorage.setItem(
-      WEATHER_CACHE_KEY,
+      key,
       JSON.stringify({
         data,
         timestamp: Date.now(),
@@ -330,19 +405,32 @@ export async function fetchLiveWeather(
   let targetLat = lat;
   let targetLon = lon;
 
-  // Auto-correct if default San Francisco coordinates are attached to a non-SF city
-  const isDefaultSfCoords = Math.abs(lat - 37.7749) < 0.001 && Math.abs(lon - (-122.4194)) < 0.001;
-  const isSfName = cityName.toLowerCase().includes('san francisco');
-
-  if (isDefaultSfCoords && !isSfName && cityName.trim()) {
-    try {
-      const resolved = await geocodeLocation(cityName);
-      if (resolved) {
-        targetLat = resolved.lat;
-        targetLon = resolved.lon;
+  // 1. Direct match in local dictionary for known cities (e.g. Elora, Fergus, Guelph)
+  if (cityName && cityName.trim()) {
+    const cleanLower = cityName.toLowerCase().trim();
+    const normalized = cleanLower
+      .replace(/,\s*[a-z]{2,}(\s+usa|\s+us|\s+ca|\s+canada)?$/i, '')
+      .trim();
+    const known = BUILTIN_CITIES[cleanLower] || BUILTIN_CITIES[normalized];
+    if (known) {
+      targetLat = known.lat;
+      targetLon = known.lon;
+    } else {
+      // 2. Check if passed coordinates are still default SF (37.7749) or NY (40.7128)
+      const isDefaultSf = Math.abs(lat - 37.7749) < 0.01 && Math.abs(lon - (-122.4194)) < 0.01;
+      const isDefaultNy = Math.abs(lat - 40.7128) < 0.01 && Math.abs(lon - (-74.006)) < 0.01;
+      const isSfName = cityName.toLowerCase().includes('san francisco');
+      if ((isDefaultSf && !isSfName) || isDefaultNy) {
+        try {
+          const resolved = await geocodeLocation(cityName);
+          if (resolved) {
+            targetLat = resolved.lat;
+            targetLon = resolved.lon;
+          }
+        } catch {
+          // retain passed coords
+        }
       }
-    } catch {
-      // retain passed coords
     }
   }
 
@@ -419,12 +507,12 @@ export async function fetchLiveWeather(
       forecast,
     };
 
-    setStoredWeatherCache(weatherData);
+    setStoredWeatherCache(targetLat, targetLon, units, weatherData);
     return weatherData;
   } catch (error) {
     console.warn('Network issue fetching live weather, checking cache:', error);
 
-    const cached = getStoredWeatherCache();
+    const cached = getStoredWeatherCache(targetLat, targetLon, units);
     if (cached) {
       return {
         ...cached,

@@ -34,12 +34,24 @@ export const EventCard: React.FC<EventCardProps> = ({ event, militaryTime = fals
     <div className="flex items-start py-3 sm:py-3.5 px-1.5 sm:px-2 border-b border-white/10 hover:bg-white/[0.03] transition-colors group">
       {/* 1. Left Vertical Colored Bar */}
       <div
-        className="w-2 sm:w-2.5 self-stretch min-h-[36px] rounded-full flex-shrink-0 mr-5 sm:mr-6 shadow-sm"
-        style={{ backgroundColor: event.color || '#3b82f6' }}
+        className="w-2 sm:w-2.5 self-stretch min-h-[36px] rounded-full flex-shrink-0 shadow-sm mr-6"
+        style={{
+          backgroundColor: event.color || '#3b82f6',
+          width: '8px',
+          minWidth: '8px',
+          marginRight: '24px',
+        }}
       />
 
       {/* 2. Time Column (Fixed Width, Bold White/Slate) */}
-      <div className="w-28 sm:w-32 flex-shrink-0 pt-0.5 mr-3.5 sm:mr-4 pl-0.5">
+      <div
+        className="flex-shrink-0 pt-0.5 mr-5"
+        style={{
+          width: '124px',
+          minWidth: '124px',
+          marginRight: '22px',
+        }}
+      >
         <div className="flex items-center">
           {isOngoing && (
             <span
