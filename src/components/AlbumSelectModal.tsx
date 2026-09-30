@@ -217,6 +217,7 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
                       <img
                         src={album.coverPhotoBaseUrl}
                         alt={album.title}
+                        referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';

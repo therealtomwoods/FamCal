@@ -35,6 +35,7 @@ import {
   loadStoredPhotos,
   savePhotosToIndexedDB,
   saveStoredPickedPhotos,
+  clearStoredPickedPhotos,
   hydratePhotosWithImages,
 } from './services/googlePhotos';
 import { fetchLiveWeather } from './services/weatherService';
@@ -289,7 +290,7 @@ export const App: React.FC = () => {
 
       // 4. Fetch Media Items for selected album (or PICKED_GOOGLE_PHOTOS if available)
       const currentStored = await loadStoredPhotos();
-      if (currentStored.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS')) {
+      if (currentStored.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS' || settings.selectedAlbumId === 'ALL_LIBRARY_PHOTOS')) {
         setPhotos(currentStored);
       } else {
         const albumToLoad =
@@ -302,6 +303,8 @@ export const App: React.FC = () => {
         const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
         if (fetchedPhotos.length > 0) {
           setPhotos(fetchedPhotos);
+        } else if (currentStored.length > 0) {
+          setPhotos(currentStored);
         }
       }
     } catch (err) {
@@ -330,9 +333,15 @@ export const App: React.FC = () => {
       message: 'Opening Google Photos picker window...',
     });
     try {
-      const result = await launchGooglePhotosPicker(userToken, (statusMsg) => {
-        setPhotosStatus({ success: true, message: statusMsg });
-      });
+      const result = await launchGooglePhotosPicker(
+        userToken,
+        (statusMsg) => {
+          setPhotosStatus({ success: true, message: statusMsg });
+        },
+        (updatedPhotos) => {
+          setPhotos(updatedPhotos);
+        }
+      );
       if (result.success && result.photos.length > 0) {
         setPhotos(result.photos);
         updateSettings({
@@ -363,7 +372,9 @@ export const App: React.FC = () => {
   const handleCheckPickerNow = async () => {
     setPhotosStatus({ success: true, message: 'Checking Google Photos selection...' });
     try {
-      const result = await checkActivePickerNow();
+      const result = await checkActivePickerNow((updatedPhotos) => {
+        setPhotos(updatedPhotos);
+      });
       if (result.success && result.photos.length > 0) {
         setPhotos(result.photos);
         updateSettings({
@@ -419,6 +430,7 @@ export const App: React.FC = () => {
 
   const handleDisconnectGoogle = () => {
     clearStoredSession();
+    clearStoredPickedPhotos(userToken);
     setUserToken(null);
     setUserProfile(null);
     updateSettings({ isDemoMode: true });

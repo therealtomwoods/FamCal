@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { PhotoItem } from '../types';
-import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Image, FolderOpen, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 
 interface SlideshowProps {
   photos: PhotoItem[];
@@ -28,6 +28,14 @@ const isFileName = (text?: string, filename?: string): boolean => {
   return false;
 };
 
+// Guaranteed high-res reliable family fallback photos
+const RELIABLE_FALLBACKS = [
+  'https://images.unsplash.com/photo-1502086223501-7ea6ecd79368?auto=format&fit=crop&w=1400&q=85',
+  'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1400&q=85',
+  'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1400&q=85',
+  'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=1400&q=85',
+];
+
 export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
   intervalSeconds,
@@ -36,25 +44,53 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
+  const [showLoadingBadge, setShowLoadingBadge] = useState(false);
 
-  const transitionTo = (nextIdx: number) => {
-    setPreviousIndex(currentIndex);
-    setCurrentIndex(nextIdx);
-  };
+  const currentIndexRef = useRef(currentIndex);
+  currentIndexRef.current = currentIndex;
 
-  // Automatic photo rotation
+  const photosCount = photos?.length || 0;
+  const autoSkipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const badgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const transitionTo = useCallback((nextIdx: number) => {
+    if (autoSkipTimerRef.current) {
+      clearTimeout(autoSkipTimerRef.current);
+      autoSkipTimerRef.current = null;
+    }
+    const current = currentIndexRef.current;
+    if (current !== nextIdx) {
+      setPreviousIndex(current);
+      setCurrentIndex(nextIdx);
+    }
+  }, []);
+
+  // Automatic photo rotation that cannot stall
   useEffect(() => {
-    if (!photos || photos.length <= 1) return;
+    if (photosCount <= 1) return;
 
+    const intervalMs = Math.max(3, intervalSeconds) * 1000;
     const timer = setInterval(() => {
-      setCurrentIndex((prev) => {
-        setPreviousIndex(prev);
-        return (prev + 1) % photos.length;
-      });
-    }, Math.max(3, intervalSeconds) * 1000);
+      const current = currentIndexRef.current;
+      const next = (current + 1) % photosCount;
+      setPreviousIndex(current);
+      setCurrentIndex(next);
+    }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [photos, intervalSeconds]);
+  }, [photosCount, intervalSeconds]);
+
+  // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        setPreviousIndex(null);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // Clear previousIndex after crossfade completes (1400ms)
   useEffect(() => {
@@ -65,23 +101,71 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     return () => clearTimeout(timer);
   }, [previousIndex]);
 
-  // Handle bounds
+  // Bounds safety check
   useEffect(() => {
-    if (currentIndex >= photos.length && photos.length > 0) {
+    if (currentIndex >= photosCount && photosCount > 0) {
       setCurrentIndex(0);
     }
-  }, [photos, currentIndex]);
+  }, [photosCount, currentIndex]);
 
-  const currentPhoto = photos[currentIndex];
+  // Temporary corner badge logic: auto-dismiss after 4 seconds so it never lingers indefinitely
+  useEffect(() => {
+    if (badgeTimerRef.current) {
+      clearTimeout(badgeTimerRef.current);
+      badgeTimerRef.current = null;
+    }
+
+    const currentPhoto = photos?.[currentIndex];
+    const isUnhydrated =
+      currentPhoto?.baseUrl &&
+      !currentPhoto.url.startsWith('data:') &&
+      !currentPhoto.url.startsWith('blob:') &&
+      !currentPhoto.url.includes('unsplash.com');
+
+    const photoKey = currentPhoto?.id || String(currentIndex);
+    const hasFailed = failedPhotoIds[photoKey];
+
+    if (isUnhydrated && !hasFailed) {
+      setShowLoadingBadge(true);
+      badgeTimerRef.current = setTimeout(() => {
+        setShowLoadingBadge(false);
+      }, 4000);
+    } else {
+      setShowLoadingBadge(false);
+    }
+
+    return () => {
+      if (badgeTimerRef.current) clearTimeout(badgeTimerRef.current);
+    };
+  }, [currentIndex, photos, failedPhotoIds]);
+
+  const currentPhoto = photos?.[currentIndex];
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    transitionTo((currentIndex - 1 + photos.length) % photos.length);
+    transitionTo((currentIndex - 1 + photosCount) % photosCount);
   };
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    transitionTo((currentIndex + 1) % photos.length);
+    transitionTo((currentIndex + 1) % photosCount);
+  };
+
+  // Gracefully handle image load failure: mark as failed, switch to fallback, and auto-skip if active
+  const handleImageError = (photoKey: string, idx: number) => {
+    setFailedPhotoIds((prev) => {
+      if (prev[photoKey]) return prev;
+      return { ...prev, [photoKey]: true };
+    });
+
+    // If the active visible photo failed, auto-advance to the next photo after 1.5s so it never stalls on black
+    if (idx === currentIndexRef.current && photosCount > 1) {
+      if (autoSkipTimerRef.current) clearTimeout(autoSkipTimerRef.current);
+      autoSkipTimerRef.current = setTimeout(() => {
+        const next = (currentIndexRef.current + 1) % photosCount;
+        transitionTo(next);
+      }, 1500);
+    }
   };
 
   if (!photos || photos.length === 0) {
@@ -120,11 +204,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         }
 
         const isActive = isCurrent;
-        const isUnhydratedGoogle =
-          Boolean(photo.baseUrl) &&
-          !photo.url.startsWith('data:') &&
-          !photo.url.startsWith('blob:') &&
-          !photo.url.includes('unsplash.com');
+        const photoKey = photo.id || String(idx);
+        const isFailed = failedPhotoIds[photoKey];
+        const displaySrc = isFailed
+          ? RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length]
+          : photo.url;
 
         return (
           <div
@@ -134,32 +218,33 @@ export const Slideshow: React.FC<SlideshowProps> = ({
             }`}
           >
             <img
-              src={photo.url}
-              alt={photo.caption || 'Family photo'}
+              src={displaySrc}
+              alt={photo.caption || photo.filename || 'Family photo'}
+              referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center"
               loading={idx === 0 ? 'eager' : 'lazy'}
-              onError={(e) => {
-                const target = e.currentTarget;
-                if (target.dataset.hasFallback) return;
-                target.dataset.hasFallback = 'true';
-
-                // Fallback to high quality family sample photo so no broken icon ever appears
-                const fallbacks = [
-                  'https://images.unsplash.com/photo-1502086223501-7ea6ecd79368?auto=format&fit=crop&w=1400&q=85',
-                  'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=1400&q=85',
-                  'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1400&q=85',
-                  'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=1400&q=85',
-                ];
-                target.src = fallbacks[idx % fallbacks.length];
-              }}
+              onError={() => handleImageError(photoKey, idx)}
             />
 
-            {/* Subtle corner badge if Google photo is still downloading in background */}
-            {isUnhydratedGoogle && isActive && (
-              <div className="absolute bottom-10 right-4 z-10 pointer-events-none">
-                <span className="text-[10px] text-pink-300 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full border border-pink-500/30 flex items-center gap-1">
-                  <Image className="w-3 h-3 text-pink-400 animate-pulse" />
-                  Loading high-res...
+            {/* Offline-resilient fallback background if both primary and secondary network fail */}
+            {isFailed && (
+              <div className="absolute inset-0 -z-10 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-2 text-indigo-400">
+                  <Heart className="w-8 h-8 opacity-80" />
+                </div>
+                <p className="text-sm font-semibold text-white/90">Family Memories</p>
+                <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
+                  {photo.filename || 'Connecting to Google Photos...'}
+                </p>
+              </div>
+            )}
+
+            {/* Temporary non-intrusive loading badge (auto-dismisses after 4s, never lingers) */}
+            {showLoadingBadge && isActive && !isFailed && (
+              <div className="absolute bottom-10 right-4 z-10 pointer-events-none transition-opacity duration-500">
+                <span className="text-[10px] text-blue-200 bg-black/60 backdrop-blur-sm px-2.5 py-0.5 rounded-full border border-blue-400/30 flex items-center gap-1.5 shadow-sm">
+                  <Image className="w-3 h-3 text-blue-400 animate-pulse" />
+                  Loading photo...
                 </span>
               </div>
             )}

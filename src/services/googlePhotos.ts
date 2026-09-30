@@ -166,8 +166,15 @@ export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
 /**
  * Clear cached picked photos
  */
-export function clearStoredPickedPhotos(): void {
+export function clearStoredPickedPhotos(token?: string | null): void {
   localStorage.removeItem(PICKED_PHOTOS_KEY);
+  const sessionId = localStorage.getItem('famcal_picker_session_id');
+  if (sessionId) {
+    localStorage.removeItem('famcal_picker_session_id');
+    if (token) {
+      deletePickerSession(token, sessionId).catch(() => {});
+    }
+  }
   try {
     openPhotoDB().then((db) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -204,41 +211,58 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 
 /**
  * Download authenticated image bytes from Google Photos baseUrl.
- * Tries direct authenticated fetch with size parameters.
+ * Tries authenticated fetch and direct fetch with no-referrer.
  */
 export async function downloadPhotoBlob(baseUrl: string, token: string): Promise<Blob | null> {
   const cleanBase = baseUrl.split('=')[0];
   const targetUrl = `${cleanBase}=w1200-h800`;
 
-  // 1. Direct fetch with Authorization header
+  // 1. Direct fetch with Authorization header and no-referrer
   try {
     const res = await fetchWithTimeout(targetUrl, {
       headers: { Authorization: `Bearer ${token}` },
-    }, 5000);
+      referrerPolicy: 'no-referrer',
+    }, 4000);
     if (res.ok) {
       const blob = await res.blob();
-      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+      if (blob.size > 0 && blob.type.startsWith('image/')) {
         return blob;
       }
     }
   } catch (err) {
-    console.warn('Direct photo fetch failed:', err);
+    // Expected when browser blocks CORS preflight on Authorization header
   }
 
-  // 2. Direct fetch with download parameter (=d)
+  // 2. Direct fetch with download parameter (=d) and Authorization
   try {
     const origUrl = `${cleanBase}=d`;
     const res = await fetchWithTimeout(origUrl, {
       headers: { Authorization: `Bearer ${token}` },
-    }, 5000);
+      referrerPolicy: 'no-referrer',
+    }, 4000);
     if (res.ok) {
       const blob = await res.blob();
-      if (blob.size > 0 && (blob.type.startsWith('image/') || blob.size > 1000)) {
+      if (blob.size > 0 && blob.type.startsWith('image/')) {
         return blob;
       }
     }
   } catch (origErr) {
-    console.warn('Direct photo =d fetch failed:', origErr);
+    // ignore
+  }
+
+  // 3. Direct unauthenticated fetch (simple GET, no CORS preflight, works with active session and no-referrer)
+  try {
+    const res = await fetchWithTimeout(targetUrl, {
+      referrerPolicy: 'no-referrer',
+    }, 4000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && blob.type.startsWith('image/')) {
+        return blob;
+      }
+    }
+  } catch (noAuthErr) {
+    // ignore
   }
 
   return null;
@@ -327,6 +351,13 @@ function getAutoclosePickerUri(rawUri: string): string {
  * POST https://photospicker.googleapis.com/v1/sessions
  */
 export async function createGooglePhotosPickerSession(token: string): Promise<PickerSession> {
+  // Clean up previous picker session on Google servers if one exists
+  const oldSessionId = localStorage.getItem('famcal_picker_session_id');
+  if (oldSessionId) {
+    deletePickerSession(token, oldSessionId).catch(() => {});
+    localStorage.removeItem('famcal_picker_session_id');
+  }
+
   const res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
     method: 'POST',
     headers: {
@@ -480,11 +511,13 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
  * 1. Saves all raw photo metadata immediately so all photos (hundreds) are recognized.
  * 2. High-priority hydrates the first 8 photos so slideshow starts playing in ~1-2 seconds.
  * 3. Background streams and caches the remaining photos into IndexedDB without freezing the UI.
+ * 4. Calls onPhotosUpdated whenever a batch finishes so the active slideshow UI updates seamlessly.
  */
 async function processAndStreamPickedPhotos(
   rawPhotos: PhotoItem[],
   token: string,
-  onStatusUpdate?: (status: string) => void
+  onStatusUpdate?: (status: string) => void,
+  onPhotosUpdated?: (photos: PhotoItem[]) => void
 ): Promise<PhotoItem[]> {
   // 1. Immediately save the full list to IndexedDB and localStorage
   saveStoredPickedPhotos(rawPhotos);
@@ -504,6 +537,7 @@ async function processAndStreamPickedPhotos(
 
   saveStoredPickedPhotos(fullList);
   savePhotosToIndexedDB(fullList);
+  onPhotosUpdated?.([...fullList]);
 
   // 3. If there are more photos, stream remaining photos in the background
   if (rawPhotos.length > initialBatchCount) {
@@ -516,6 +550,7 @@ async function processAndStreamPickedPhotos(
         (updated) => {
           saveStoredPickedPhotos(updated);
           savePhotosToIndexedDB(updated);
+          onPhotosUpdated?.(updated);
         }
       ).catch((err) => console.warn('Background streaming hydration failed:', err));
     }, 150);
@@ -529,7 +564,9 @@ async function processAndStreamPickedPhotos(
 /**
  * Manually check active session status immediately (called when user clicks 'Check Photos Now')
  */
-export async function checkActivePickerNow(): Promise<{ success: boolean; photos: PhotoItem[]; error?: string }> {
+export async function checkActivePickerNow(
+  onPhotosUpdated?: (photos: PhotoItem[]) => void
+): Promise<{ success: boolean; photos: PhotoItem[]; error?: string }> {
   if (!currentActiveSession) {
     return { success: false, photos: [], error: 'No active Google Photos selection in progress.' };
   }
@@ -546,11 +583,12 @@ export async function checkActivePickerNow(): Promise<{ success: boolean; photos
 
   try {
     const rawPhotos = await fetchPickerSelectedMediaItems(token, id);
-    await deletePickerSession(token, id);
+    // Keep session active for baseUrls validity - do not delete session immediately!
+    localStorage.setItem('famcal_picker_session_id', id);
     currentActiveSession = null;
 
     if (rawPhotos.length > 0) {
-      const photos = await processAndStreamPickedPhotos(rawPhotos, token);
+      const photos = await processAndStreamPickedPhotos(rawPhotos, token, undefined, onPhotosUpdated);
       return { success: true, photos };
     } else {
       return { success: false, photos: [], error: 'No photos were selected.' };
@@ -577,7 +615,8 @@ export async function cancelActivePickerSession(): Promise<void> {
  */
 export async function launchGooglePhotosPicker(
   token: string,
-  onStatusUpdate?: (status: string) => void
+  onStatusUpdate?: (status: string) => void,
+  onPhotosUpdated?: (photos: PhotoItem[]) => void
 ): Promise<{ success: boolean; photos: PhotoItem[]; error?: string }> {
   if (!token) {
     return { success: false, photos: [], error: 'Google account not signed in' };
@@ -654,12 +693,12 @@ export async function launchGooglePhotosPicker(
     // 4. Fetch the selected photos metadata
     const rawPhotos = await fetchPickerSelectedMediaItems(token, session.id);
 
-    // 5. Clean up session only after items are safely fetched
-    await deletePickerSession(token, session.id);
+    // Keep session active for baseUrls validity - do not delete session immediately!
+    localStorage.setItem('famcal_picker_session_id', session.id);
     currentActiveSession = null;
 
     if (rawPhotos.length > 0) {
-      const photos = await processAndStreamPickedPhotos(rawPhotos, token, onStatusUpdate);
+      const photos = await processAndStreamPickedPhotos(rawPhotos, token, onStatusUpdate, onPhotosUpdated);
       return { success: true, photos };
     } else {
       return {
