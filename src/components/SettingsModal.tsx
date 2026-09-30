@@ -16,7 +16,10 @@ import {
   ExternalLink,
   AlertCircle,
   CheckCircle2,
+  MapPin,
+  Locate,
 } from 'lucide-react';
+import { geocodeLocation, detectBrowserLocation } from '../services/weatherService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -62,10 +65,100 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
   const [agendaTitleInput, setAgendaTitleInput] = useState(settings.familyAgendaTitle || 'Family Agenda');
+  const [weatherLocationInput, setWeatherLocationInput] = useState(settings.weatherLocation || 'San Francisco, CA');
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [locationFeedback, setLocationFeedback] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
   const [activeTab, setActiveTab] = useState<'google' | 'widgets' | 'general'>('google');
   const [showSavedToast, setShowSavedToast] = useState(false);
 
+  // Sync weatherLocationInput if settings update externally
+  React.useEffect(() => {
+    if (settings.weatherLocation) {
+      setWeatherLocationInput(settings.weatherLocation);
+    }
+  }, [settings.weatherLocation]);
+
   if (!isOpen) return null;
+
+  const handleApplyWeatherLocation = async (overrideLoc?: string) => {
+    const query = (overrideLoc ?? weatherLocationInput).trim();
+    if (!query) return;
+    setIsGeocoding(true);
+    setLocationFeedback(null);
+    try {
+      const geo = await geocodeLocation(query);
+      if (geo) {
+        setWeatherLocationInput(geo.name);
+        onUpdateSettings({
+          weatherLocation: geo.name,
+          weatherLat: geo.lat,
+          weatherLon: geo.lon,
+        });
+        try {
+          localStorage.setItem('famcal_user_set_weather_loc', 'true');
+        } catch {
+          // ignore
+        }
+        setLocationFeedback({
+          type: 'success',
+          text: `Resolved: ${geo.name} (${geo.lat.toFixed(2)}°, ${geo.lon.toFixed(2)}°)`,
+        });
+      } else {
+        setLocationFeedback({
+          type: 'error',
+          text: `Could not locate "${query}". Please check spelling or enter coordinates.`,
+        });
+      }
+    } catch (err: any) {
+      setLocationFeedback({
+        type: 'error',
+        text: err?.message || 'Geocoding request failed',
+      });
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
+  const handleDetectLocation = async () => {
+    setIsDetectingLocation(true);
+    setLocationFeedback(null);
+    try {
+      const loc = await detectBrowserLocation();
+      if (loc) {
+        setWeatherLocationInput(loc.city);
+        onUpdateSettings({
+          weatherLocation: loc.city,
+          weatherLat: loc.lat,
+          weatherLon: loc.lon,
+        });
+        try {
+          localStorage.setItem('famcal_user_set_weather_loc', 'true');
+        } catch {
+          // ignore
+        }
+        setLocationFeedback({
+          type: 'success',
+          text: `Detected: ${loc.city} (${loc.lat.toFixed(2)}°, ${loc.lon.toFixed(2)}°)`,
+        });
+      } else {
+        setLocationFeedback({
+          type: 'error',
+          text: 'Location detection was blocked or unavailable. Type your city or zip code below.',
+        });
+      }
+    } catch {
+      setLocationFeedback({
+        type: 'error',
+        text: 'Error accessing device location.',
+      });
+    } finally {
+      setIsDetectingLocation(false);
+    }
+  };
 
   const handleSaveAll = () => {
     onUpdateSettings({
@@ -73,6 +166,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
       familyAgendaTitle: agendaTitleInput.trim() || 'Family Agenda',
     });
+    if (weatherLocationInput.trim() && weatherLocationInput.trim() !== settings.weatherLocation) {
+      handleApplyWeatherLocation(weatherLocationInput.trim());
+    }
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 2000);
   };
@@ -443,41 +539,118 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 {settings.showWeather && (
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
-                    <div>
-                      <label className="text-[11px] text-slate-400 font-semibold">City Name</label>
-                      <input
-                        type="text"
-                        value={settings.weatherLocation}
-                        onChange={(e) => onUpdateSettings({ weatherLocation: e.target.value })}
-                        className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs"
-                      />
+                  <div className="space-y-3 pt-2.5 border-t border-white/5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">
+                        Location & Units
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleDetectLocation}
+                        disabled={isDetectingLocation}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-600/25 hover:bg-blue-600/40 border border-blue-500/40 text-blue-300 text-xs font-semibold transition disabled:opacity-50"
+                        title="Auto-detect current location using GPS / network"
+                      >
+                        {isDetectingLocation ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Locate className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isDetectingLocation ? 'Detecting...' : 'Detect My Location'}</span>
+                      </button>
                     </div>
-                    <div>
-                      <label className="text-[11px] text-slate-400 font-semibold">Units</label>
-                      <div className="flex gap-1 mt-1">
-                        <button
-                          onClick={() => onUpdateSettings({ weatherUnits: 'F' })}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
-                            settings.weatherUnits === 'F'
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-900 text-slate-400'
-                          }`}
-                        >
-                          °F
-                        </button>
-                        <button
-                          onClick={() => onUpdateSettings({ weatherUnits: 'C' })}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
-                            settings.weatherUnits === 'C'
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-900 text-slate-400'
-                          }`}
-                        >
-                          °C
-                        </button>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="sm:col-span-2">
+                        <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                          City, Postal Code, or Coordinates
+                        </label>
+                        <div className="flex gap-1.5">
+                          <input
+                            type="text"
+                            value={weatherLocationInput}
+                            onChange={(e) => setWeatherLocationInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleApplyWeatherLocation();
+                              }
+                            }}
+                            placeholder="e.g. Austin, TX or 90210"
+                            className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-white/10 text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleApplyWeatherLocation()}
+                            disabled={isGeocoding || !weatherLocationInput.trim()}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-white/10 text-xs font-semibold text-white transition disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {isGeocoding ? (
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                            ) : (
+                              'Apply'
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] text-slate-400 font-medium block mb-1">
+                          Units
+                        </label>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => onUpdateSettings({ weatherUnits: 'F' })}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${
+                              settings.weatherUnits === 'F'
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                            }`}
+                          >
+                            °F
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onUpdateSettings({ weatherUnits: 'C' })}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition ${
+                              settings.weatherUnits === 'C'
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+                            }`}
+                          >
+                            °C
+                          </button>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Geocode Feedback / Active Location Status */}
+                    {locationFeedback ? (
+                      <div
+                        className={`text-[11px] px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 ${
+                          locationFeedback.type === 'success'
+                            ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                            : locationFeedback.type === 'error'
+                            ? 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
+                            : 'bg-blue-500/10 text-blue-300 border border-blue-500/20'
+                        }`}
+                      >
+                        {locationFeedback.type === 'success' ? (
+                          <Check className="w-3.5 h-3.5 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                        )}
+                        <span>{locationFeedback.text}</span>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 px-1">
+                        <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                        <span className="truncate">
+                          Current Forecast Location: <span className="text-white font-medium">{settings.weatherLocation}</span> ({settings.weatherLat.toFixed(2)}°, {settings.weatherLon.toFixed(2)}°)
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

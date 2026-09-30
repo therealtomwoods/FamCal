@@ -38,7 +38,7 @@ import {
   clearStoredPickedPhotos,
   hydratePhotosWithImages,
 } from './services/googlePhotos';
-import { fetchLiveWeather } from './services/weatherService';
+import { fetchLiveWeather, detectBrowserLocation, geocodeLocation } from './services/weatherService';
 import { fetchSingleStockQuote } from './services/stockService';
 
 import { Slideshow } from './components/Slideshow';
@@ -179,6 +179,47 @@ export const App: React.FC = () => {
       isMounted = false;
     };
   }, [userToken, photos, settings.isDemoMode]);
+
+  // 1. Auto-detect user's local weather location on first startup if still default SF
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const userSet = localStorage.getItem('famcal_user_set_weather_loc');
+    const isDefaultSf =
+      settings.weatherLocation === 'San Francisco, CA' &&
+      Math.abs(settings.weatherLat - 37.7749) < 0.001;
+
+    if (!userSet && isDefaultSf) {
+      detectBrowserLocation().then((loc) => {
+        if (loc) {
+          updateSettings({
+            weatherLocation: loc.city,
+            weatherLat: loc.lat,
+            weatherLon: loc.lon,
+          });
+        }
+      });
+    }
+  }, []);
+
+  // 2. Proactive fix for users who saved a custom city name previously but still had SF coordinates
+  useEffect(() => {
+    const isCustomCityWithOldSfCoords =
+      settings.weatherLocation &&
+      !settings.weatherLocation.toLowerCase().includes('san francisco') &&
+      Math.abs(settings.weatherLat - 37.7749) < 0.001 &&
+      Math.abs(settings.weatherLon - (-122.4194)) < 0.001;
+
+    if (isCustomCityWithOldSfCoords) {
+      geocodeLocation(settings.weatherLocation).then((geo) => {
+        if (geo) {
+          updateSettings({
+            weatherLat: geo.lat,
+            weatherLon: geo.lon,
+          });
+        }
+      });
+    }
+  }, [settings.weatherLocation]);
 
   // Weather fetcher
   useEffect(() => {

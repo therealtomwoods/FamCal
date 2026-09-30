@@ -54,7 +54,9 @@ export const WeatherWidget: React.FC<WeatherWidgetProps> = ({ weather, units = '
             </span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-slate-300 leading-tight mt-1">
-            <span className="truncate max-w-[100px] font-semibold text-slate-200">{weather.city}</span>
+            <span className="truncate max-w-[100px] sm:max-w-[130px] font-semibold text-slate-200" title={weather.city}>
+              {weather.city}
+            </span>
             <span className="text-slate-500">•</span>
             <span className="text-slate-300 font-medium">H:{weather.high}° L:{weather.low}°</span>
           </div>
