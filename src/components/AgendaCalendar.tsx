@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CalendarEvent, CalendarInfo, WeatherData, StockItem } from '../types';
 import { EventCard } from './EventCard';
-import { WeatherWidget } from './WeatherWidget';
+import { WeatherWidget, renderWeatherIcon } from './WeatherWidget';
 import { StockTickerWidget } from './StockTickerWidget';
 import { Calendar as CalendarIcon, Filter, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -249,6 +249,16 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
                 const dayEvents = groupedEvents[key] || [];
                 const { dayNumber, label, weekdayShort, dateFormatted, isToday } =
                   formatHeaderDate(key);
+                const dayWeather = isToday
+                  ? (weather
+                      ? {
+                          tempMax: weather.high,
+                          tempMin: weather.low,
+                          icon: weather.icon,
+                          condition: weather.condition,
+                        }
+                      : null)
+                  : (weather?.forecast?.find((f) => f.date === key) || null);
 
                 return (
                   <div
@@ -289,17 +299,36 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
                         </div>
                       </div>
 
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded-full font-bold flex-shrink-0 ml-1 ${
-                          dayEvents.length > 0
-                            ? isToday
-                              ? 'bg-blue-500/30 text-blue-200 border border-blue-400/30'
-                              : 'bg-slate-800 text-slate-300 border border-white/10'
-                            : 'text-slate-600 bg-white/5'
-                        }`}
-                      >
-                        {dayEvents.length}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-shrink-0 ml-1">
+                        {/* Day Weather Outlook Pill */}
+                        {dayWeather && (
+                          <div
+                            className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-white/5 border border-white/10 text-xs"
+                            title={`${dayWeather.condition}: High ${dayWeather.tempMax}°, Low ${dayWeather.tempMin}°`}
+                          >
+                            {renderWeatherIcon(dayWeather.icon, 'w-3.5 h-3.5')}
+                            <span className="text-[11px] font-bold text-white leading-none">
+                              {dayWeather.tempMax}°
+                            </span>
+                            <span className="text-[10px] text-slate-500 leading-none">/</span>
+                            <span className="text-[10px] text-slate-400 leading-none">
+                              {dayWeather.tempMin}°
+                            </span>
+                          </div>
+                        )}
+
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-bold flex-shrink-0 ${
+                            dayEvents.length > 0
+                              ? isToday
+                                ? 'bg-blue-500/30 text-blue-200 border border-blue-400/30'
+                                : 'bg-slate-800 text-slate-300 border border-white/10'
+                              : 'text-slate-600 bg-white/5'
+                          }`}
+                        >
+                          {dayEvents.length}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Events Scroll Area for this Day Column */}
@@ -347,6 +376,16 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
             sortedDateKeys.map((dateKey) => {
               const dayEvents = groupedEvents[dateKey] || [];
               const { dayNumber, label, weekday, dateFormatted, isToday } = formatHeaderDate(dateKey);
+              const dayWeather = isToday
+                ? (weather
+                    ? {
+                        tempMax: weather.high,
+                        tempMin: weather.low,
+                        icon: weather.icon,
+                        condition: weather.condition,
+                      }
+                    : null)
+                : (weather?.forecast?.find((f) => f.date === dateKey) || null);
 
               return (
                 <div key={dateKey} className="space-y-1">
@@ -382,9 +421,26 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
                       </span>
                     </div>
 
-                    <span className="text-xs font-semibold text-slate-500">
-                      {dayEvents.length} {dayEvents.length === 1 ? 'event' : 'events'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {dayWeather && (
+                        <div
+                          className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-white/5 border border-white/10 text-xs"
+                          title={`${dayWeather.condition}: High ${dayWeather.tempMax}°, Low ${dayWeather.tempMin}°`}
+                        >
+                          {renderWeatherIcon(dayWeather.icon, 'w-3.5 h-3.5')}
+                          <span className="text-xs font-bold text-white leading-none">
+                            {dayWeather.tempMax}°
+                          </span>
+                          <span className="text-[10px] text-slate-500 leading-none">/</span>
+                          <span className="text-[11px] text-slate-400 leading-none">
+                            {dayWeather.tempMin}°
+                          </span>
+                        </div>
+                      )}
+                      <span className="text-xs font-semibold text-slate-500">
+                        {dayEvents.length} {dayEvents.length === 1 ? 'event' : 'events'}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Day Events or Empty State */}

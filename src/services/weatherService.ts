@@ -385,21 +385,30 @@ export async function detectBrowserLocation(): Promise<{
   });
 }
 
-const WEATHER_CACHE_PREFIX = 'famcal_live_weather_v2';
+const WEATHER_CACHE_PREFIX = 'famcal_live_weather_v4';
 
 function getStoredWeatherCache(lat: number, lon: number, units: 'F' | 'C'): WeatherData | null {
   try {
-    // Purge old unversioned/unisolated cache
+    // Purge old unversioned/unisolated caches
     localStorage.removeItem('famcal_live_weather_cache');
+    localStorage.removeItem('famcal_live_weather_v2');
+    localStorage.removeItem('famcal_live_weather_v3');
     const key = `${WEATHER_CACHE_PREFIX}_${lat.toFixed(2)}_${lon.toFixed(2)}_${units}`;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    // Cache valid for up to 30 minutes
-    if (parsed && parsed.timestamp && Date.now() - parsed.timestamp < 30 * 60 * 1000) {
+    // Cache valid for up to 30 minutes and must have at least 4 forecast days
+    if (
+      parsed &&
+      parsed.timestamp &&
+      Date.now() - parsed.timestamp < 30 * 60 * 1000 &&
+      parsed.data &&
+      Array.isArray(parsed.data.forecast) &&
+      parsed.data.forecast.length >= 4
+    ) {
       return parsed.data as WeatherData;
     }
-    return (parsed?.data as WeatherData) || null;
+    return null;
   } catch {
     return null;
   }
@@ -731,38 +740,47 @@ export async function fetchLiveWeather(
   // 1. WeatherAPI.com (if key provided or chosen)
   if ((apiKey || preferredProvider === 'weatherapi') && apiKey?.trim()) {
     const wApiRes = await fetchWeatherApiCom(apiKey, cleanCity, units);
-    if (wApiRes) {
+    if (wApiRes && wApiRes.forecast.length >= 4) {
       setStoredWeatherCache(targetLat, targetLon, units, wApiRes);
       return wApiRes;
     }
   }
 
-  // 2. wttr.in (Primary live station observation by municipality name)
+  // 2. Open-Meteo (Primary for 'auto' and 'openmeteo': high-resolution official meteorological models with exact coordinates and guaranteed 4-day outlook)
+  if (preferredProvider === 'auto' || preferredProvider === 'openmeteo') {
+    const omRes = await fetchOpenMeteoWeather(targetLat, targetLon, cleanCity, units);
+    if (omRes && omRes.forecast.length >= 4) {
+      setStoredWeatherCache(targetLat, targetLon, units, omRes);
+      return omRes;
+    }
+  }
+
+  // 3. wttr.in (live station observations by municipality name)
   if (preferredProvider === 'auto' || preferredProvider === 'wttr') {
     const wttrRes = await fetchWttrWeather(cleanCity, units);
     if (wttrRes) {
+      if (wttrRes.forecast.length < 4) {
+        // Guarantee full 4-day outlook by fetching forecast days from Open-Meteo
+        const omRes = await fetchOpenMeteoWeather(targetLat, targetLon, cleanCity, units);
+        if (omRes?.forecast && omRes.forecast.length >= 4) {
+          wttrRes.forecast = omRes.forecast;
+        }
+      }
       setStoredWeatherCache(targetLat, targetLon, units, wttrRes);
       return wttrRes;
     }
   }
 
-  // 3. Open-Meteo (high-resolution model fallback)
-  const omRes = await fetchOpenMeteoWeather(targetLat, targetLon, cleanCity, units);
-  if (omRes) {
-    setStoredWeatherCache(targetLat, targetLon, units, omRes);
-    return omRes;
-  }
-
   // 4. Stored Cache Fallback
   const cached = getStoredWeatherCache(targetLat, targetLon, units);
-  if (cached) {
+  if (cached && cached.forecast.length >= 4) {
     return {
       ...cached,
       city: cleanCity || cached.city,
     };
   }
 
-  // 5. Seasonal fallback
+  // 5. Seasonal fallback with guaranteed 4-day outlook
   const fallbackForecast: DailyForecast[] = [1, 2, 3, 4].map((offset) => {
     const d = new Date(Date.now() + offset * 86400000);
     const dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
