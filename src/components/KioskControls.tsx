@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Maximize, Minimize, Sun, Moon, RefreshCw, Settings, ShieldCheck, Sparkles, Layers, Calendar } from 'lucide-react';
+import { Maximize, Minimize, Sun, Moon, RefreshCw, Settings, ShieldCheck, Sparkles, Layers, Calendar, Columns4, Smartphone } from 'lucide-react';
 
 interface KioskControlsProps {
   isDemoMode: boolean;
@@ -8,6 +8,8 @@ interface KioskControlsProps {
   onOpenCalendarFilter: () => void;
   isFramed: boolean;
   onToggleFraming: () => void;
+  isHorizontal: boolean;
+  onToggleScreenMode: () => void;
 }
 
 export const KioskControls: React.FC<KioskControlsProps> = ({
@@ -17,6 +19,8 @@ export const KioskControls: React.FC<KioskControlsProps> = ({
   onOpenCalendarFilter,
   isFramed,
   onToggleFraming,
+  isHorizontal,
+  onToggleScreenMode,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
@@ -85,10 +89,10 @@ export const KioskControls: React.FC<KioskControlsProps> = ({
           </span>
         )}
 
-        {/* 9:16 Aspect Framing Toggle (for desktop testing) */}
+        {/* Aspect Framing Toggle (for desktop testing) */}
         <button
           onClick={onToggleFraming}
-          title={isFramed ? "Switch to Full Bleed View" : "Switch to 9:16 Kiosk Frame Preview"}
+          title={isFramed ? "Switch to Full Bleed View" : `Switch to ${isHorizontal ? '16:9' : '9:16'} Kiosk Frame Preview`}
           className={`p-1.5 rounded-xl border text-xs font-medium transition flex items-center gap-1 ${
             isFramed
               ? 'bg-blue-600/30 border-blue-500/40 text-blue-300'
@@ -96,7 +100,29 @@ export const KioskControls: React.FC<KioskControlsProps> = ({
           }`}
         >
           <Layers className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{isFramed ? 'Framed 9:16' : 'Full Bleed'}</span>
+          <span className="hidden sm:inline">{isFramed ? (isHorizontal ? 'Framed 16:9' : 'Framed 9:16') : 'Full Bleed'}</span>
+        </button>
+
+        {/* Screen Mode Toggle Button (Vertical 9:16 vs Horizontal 4-Column) */}
+        <button
+          onClick={onToggleScreenMode}
+          title={
+            isHorizontal
+              ? "Switch to Vertical Screen Mode (Single Column Agenda)"
+              : "Switch to Horizontal Screen Mode (4-Column Days Across)"
+          }
+          className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
+            isHorizontal
+              ? 'bg-blue-600/30 border-blue-500/50 text-blue-300 shadow-sm'
+              : 'bg-slate-900 border-white/10 text-slate-300 hover:text-white hover:bg-slate-800'
+          }`}
+        >
+          {isHorizontal ? (
+            <Columns4 className="w-3.5 h-3.5 text-blue-400" />
+          ) : (
+            <Smartphone className="w-3.5 h-3.5 text-slate-400" />
+          )}
+          <span>{isHorizontal ? 'Horizontal (4-Col)' : 'Vertical Mode'}</span>
         </button>
       </div>
 

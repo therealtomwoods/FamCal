@@ -18,6 +18,8 @@ import {
   CheckCircle2,
   MapPin,
   Locate,
+  Columns4,
+  Smartphone,
 } from 'lucide-react';
 import { geocodeLocation, detectBrowserLocation, fetchLiveWeather } from '../services/weatherService';
 
@@ -985,12 +987,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
-              {/* 9:16 Kiosk Frame Preview */}
+              {/* Screen Orientation / Layout Mode */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-bold text-white">Screen Layout Mode</p>
+                    <p className="text-xs text-slate-400">
+                      Choose between vertical (portrait 9:16) or horizontal (widescreen 4-day columns)
+                    </p>
+                  </div>
+                  <div className="flex bg-slate-900 border border-white/10 rounded-xl p-1 gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => onUpdateSettings({ screenMode: 'vertical' })}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                        settings.screenMode !== 'horizontal'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Smartphone className="w-3.5 h-3.5" />
+                      <span>Vertical</span>
+                    </button>
+                    <button
+                      onClick={() => onUpdateSettings({ screenMode: 'horizontal' })}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                        settings.screenMode === 'horizontal'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Columns4 className="w-3.5 h-3.5" />
+                      <span>Horizontal (4-Col)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Kiosk Frame Preview */}
               <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 flex items-center justify-between">
                 <div>
-                  <p className="font-bold text-white">Frame in 9:16 Aspect Box</p>
+                  <p className="font-bold text-white">Kiosk Frame Preview Border</p>
                   <p className="text-xs text-slate-400">
-                    Preview portrait wall display format on widescreen desktop monitors
+                    Preview tablet wall display format with rounded border frame on desktop browsers
                   </p>
                 </div>
                 <button

@@ -75,6 +75,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   isDemoMode: false,
   militaryTime: false,
   familyAgendaTitle: 'Woods Agenda',
+  screenMode: 'vertical',
 };
 
 export const App: React.FC = () => {
@@ -615,20 +616,35 @@ export const App: React.FC = () => {
     }
   };
 
+  const isHorizontal = settings.screenMode === 'horizontal';
+
+  const handleToggleScreenMode = () => {
+    updateSettings({
+      screenMode: isHorizontal ? 'vertical' : 'horizontal',
+    });
+  };
+
   return (
     <div className="w-full h-full min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
-      {/* 9:16 Aspect Display Container */}
+      {/* Aspect Display Container (Vertical 9:16 or Horizontal 16:9/Widescreen) */}
       <div
         className={`w-full h-full flex flex-col transition-all duration-300 ${
           settings.isKioskFramed
-            ? 'max-w-[480px] h-[98vh] max-h-[1050px] aspect-[9/16] rounded-3xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
+            ? isHorizontal
+              ? 'max-w-[1400px] h-[98vh] max-h-[920px] aspect-[16/9] rounded-3xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
+              : 'max-w-[480px] h-[98vh] max-h-[1050px] aspect-[9/16] rounded-3xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
             : 'max-w-none'
         }`}
       >
         {/* ========================================================= */}
-        {/* TOP 45%: PHOTO SLIDESHOW (with LARGE CLOCK in top-right)  */}
+        {/* PHOTO SLIDESHOW (with LARGE CLOCK in top-right)           */}
+        {/* In Horizontal: panoramic 30% height; in Vertical: 45%     */}
         {/* ========================================================= */}
-        <div className="relative w-full h-[45%] flex-shrink-0 overflow-hidden bg-black">
+        <div
+          className={`relative w-full ${
+            isHorizontal ? 'h-[30%] min-h-[160px] max-h-[250px]' : 'h-[45%]'
+          } flex-shrink-0 overflow-hidden bg-black transition-all duration-300`}
+        >
           <Slideshow
             photos={photos}
             albumTitle={settings.selectedAlbumName || 'Google Photos'}
@@ -648,9 +664,9 @@ export const App: React.FC = () => {
         </div>
 
         {/* ========================================================= */}
-        {/* BOTTOM 55%: AGENDA CALENDAR DISPLAY WITH IN-LINE RIBBON   */}
+        {/* CALENDAR DISPLAY (4 COLUMNS IN HORIZONTAL, 1 IN VERTICAL) */}
         {/* ========================================================= */}
-        <div className="flex-1 w-full overflow-hidden flex flex-col bg-black">
+        <div className="flex-1 w-full overflow-hidden flex flex-col bg-black min-h-0">
           <AgendaCalendar
             events={events}
             calendars={calendars}
@@ -659,6 +675,7 @@ export const App: React.FC = () => {
             agendaTitle={settings.familyAgendaTitle || 'Family Agenda'}
             onOpenCalendarFilter={() => setIsCalendarFilterOpen(true)}
             isLoading={isLoadingEvents}
+            isFourColumnMode={isHorizontal}
             // IN-LINE WIDGETS IN THE FAMILY AGENDA RIBBON
             weather={weather}
             stock={monitoredStockItem}
@@ -678,6 +695,8 @@ export const App: React.FC = () => {
           onOpenCalendarFilter={() => setIsCalendarFilterOpen(true)}
           isFramed={settings.isKioskFramed}
           onToggleFraming={() => updateSettings({ isKioskFramed: !settings.isKioskFramed })}
+          isHorizontal={isHorizontal}
+          onToggleScreenMode={handleToggleScreenMode}
         />
       </div>
 
