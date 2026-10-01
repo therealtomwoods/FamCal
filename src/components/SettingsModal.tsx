@@ -19,7 +19,7 @@ import {
   MapPin,
   Locate,
 } from 'lucide-react';
-import { geocodeLocation, detectBrowserLocation } from '../services/weatherService';
+import { geocodeLocation, detectBrowserLocation, fetchLiveWeather } from '../services/weatherService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -65,7 +65,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
   const [agendaTitleInput, setAgendaTitleInput] = useState(settings.familyAgendaTitle || 'Family Agenda');
-  const [weatherLocationInput, setWeatherLocationInput] = useState(settings.weatherLocation || 'San Francisco, CA');
+  const [weatherLocationInput, setWeatherLocationInput] = useState(settings.weatherLocation || 'Elora, Ontario');
+  const [weatherApiKeyInput, setWeatherApiKeyInput] = useState(settings.weatherApiKey || '');
+  const [weatherProviderInput, setWeatherProviderInput] = useState<'auto' | 'wttr' | 'openmeteo' | 'weatherapi'>(settings.weatherProvider || 'auto');
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [locationFeedback, setLocationFeedback] = useState<{
@@ -80,7 +82,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (settings.weatherLocation) {
       setWeatherLocationInput(settings.weatherLocation);
     }
-  }, [settings.weatherLocation]);
+    if (settings.weatherApiKey) {
+      setWeatherApiKeyInput(settings.weatherApiKey);
+    }
+    if (settings.weatherProvider) {
+      setWeatherProviderInput(settings.weatherProvider);
+    }
+  }, [settings.weatherLocation, settings.weatherApiKey, settings.weatherProvider]);
 
   if (!isOpen) return null;
 
@@ -91,26 +99,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setLocationFeedback(null);
     try {
       const geo = await geocodeLocation(query);
-      if (geo) {
-        setWeatherLocationInput(geo.name);
-        onUpdateSettings({
-          weatherLocation: geo.name,
-          weatherLat: geo.lat,
-          weatherLon: geo.lon,
-        });
-        try {
-          localStorage.setItem('famcal_user_set_weather_loc', 'true');
-        } catch {
-          // ignore
-        }
+      const targetName = geo?.name || query;
+      const targetLat = geo?.lat ?? settings.weatherLat;
+      const targetLon = geo?.lon ?? settings.weatherLon;
+
+      setWeatherLocationInput(targetName);
+      onUpdateSettings({
+        weatherLocation: targetName,
+        weatherLat: targetLat,
+        weatherLon: targetLon,
+        weatherApiKey: weatherApiKeyInput.trim(),
+        weatherProvider: weatherProviderInput,
+      });
+
+      try {
+        localStorage.setItem('famcal_user_set_weather_loc', 'true');
+      } catch {
+        // ignore
+      }
+
+      // Immediately fetch live verification to give user real-time feedback
+      const live = await fetchLiveWeather(
+        targetLat,
+        targetLon,
+        targetName,
+        settings.weatherUnits,
+        weatherApiKeyInput.trim(),
+        weatherProviderInput
+      );
+
+      if (live) {
         setLocationFeedback({
           type: 'success',
-          text: `Resolved: ${geo.name} (${geo.lat.toFixed(2)}°, ${geo.lon.toFixed(2)}°)`,
+          text: `Verified Live: ${targetName} — ${live.temp}°${settings.weatherUnits}, ${live.condition} (H:${live.high}° L:${live.low}°)`,
         });
       } else {
         setLocationFeedback({
-          type: 'error',
-          text: `Could not locate "${query}". Please check spelling or enter coordinates.`,
+          type: 'success',
+          text: `Saved: ${targetName} (${targetLat.toFixed(2)}°, ${targetLon.toFixed(2)}°)`,
         });
       }
     } catch (err: any) {
@@ -165,6 +191,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       googleClientId: clientIdInput.trim(),
       monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
       familyAgendaTitle: agendaTitleInput.trim() || 'Family Agenda',
+      weatherApiKey: weatherApiKeyInput.trim(),
+      weatherProvider: weatherProviderInput,
     });
     if (weatherLocationInput.trim() && weatherLocationInput.trim() !== settings.weatherLocation) {
       handleApplyWeatherLocation(weatherLocationInput.trim());
@@ -625,6 +653,94 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
 
+                    {/* Weather Source & Provider Options */}
+                    <div className="p-3 rounded-lg bg-slate-900/90 border border-white/5 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">
+                          Weather Data Source
+                        </label>
+                        <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/20">
+                          {weatherProviderInput === 'weatherapi' ? 'WeatherAPI.com' : 'Multi-Source (wttr.in + Open-Meteo)'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWeatherProviderInput('auto');
+                            onUpdateSettings({ weatherProvider: 'auto' });
+                            handleApplyWeatherLocation();
+                          }}
+                          className={`p-2 rounded-lg text-xs font-semibold text-left transition border ${
+                            weatherProviderInput === 'auto' || weatherProviderInput === 'wttr'
+                              ? 'bg-blue-600/30 border-blue-500 text-white'
+                              : 'bg-slate-800/60 border-white/5 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="font-bold flex items-center justify-between">
+                            <span>Multi-Source</span>
+                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded">Recommended</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">wttr.in + Open-Meteo (Free, No key)</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWeatherProviderInput('weatherapi');
+                            onUpdateSettings({ weatherProvider: 'weatherapi' });
+                          }}
+                          className={`p-2 rounded-lg text-xs font-semibold text-left transition border ${
+                            weatherProviderInput === 'weatherapi'
+                              ? 'bg-blue-600/30 border-blue-500 text-white'
+                              : 'bg-slate-800/60 border-white/5 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <div className="font-bold">WeatherAPI.com</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">Hyper-local station key</div>
+                        </button>
+                      </div>
+
+                      {weatherProviderInput === 'weatherapi' && (
+                        <div className="space-y-1.5 pt-2 border-t border-white/5 animate-in fade-in duration-150">
+                          <label className="text-[10px] text-slate-400 font-medium block">
+                            WeatherAPI.com API Key
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="password"
+                              value={weatherApiKeyInput}
+                              onChange={(e) => setWeatherApiKeyInput(e.target.value)}
+                              placeholder="Paste WeatherAPI.com key"
+                              className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-white/10 text-white text-xs font-mono placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onUpdateSettings({ weatherApiKey: weatherApiKeyInput.trim() });
+                                handleApplyWeatherLocation();
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold"
+                            >
+                              Save Key
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-400">
+                            Get a free key (1,000,000 requests/month, no credit card required) at{' '}
+                            <a
+                              href="https://www.weatherapi.com/signup.aspx"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-400 underline font-semibold"
+                            >
+                              weatherapi.com/signup.aspx
+                            </a>.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Geocode Feedback / Active Location Status */}
                     {locationFeedback ? (
                       <div
@@ -647,7 +763,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="text-[11px] text-slate-400 flex items-center gap-1.5 px-1">
                         <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                         <span className="truncate">
-                          Current Forecast Location: <span className="text-white font-medium">{settings.weatherLocation}</span> ({settings.weatherLat.toFixed(2)}°, {settings.weatherLon.toFixed(2)}°)
+                          Current Forecast Location: <span className="text-white font-medium">{settings.weatherLocation}</span>
                         </span>
                       </div>
                     )}

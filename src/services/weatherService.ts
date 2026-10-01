@@ -14,6 +14,35 @@ export function getWmoCondition(code: number): { text: string; icon: string } {
   return { text: 'Mild & Pleasant', icon: 'sun' };
 }
 
+export function getWeatherConditionInfo(code?: number, text?: string): { text: string; icon: string } {
+  const desc = (text || '').toLowerCase();
+  if (desc.includes('thunder') || desc.includes('lightning') || (code && code >= 95) || code === 200 || code === 386 || code === 389 || code === 392) {
+    return { text: text || 'Thunderstorm', icon: 'cloud-lightning' };
+  }
+  if (desc.includes('snow') || desc.includes('blizzard') || desc.includes('flurr') || desc.includes('ice') || desc.includes('sleet') || (code && ((code >= 71 && code <= 77) || (code >= 323 && code <= 371)))) {
+    return { text: text || 'Snow', icon: 'snowflake' };
+  }
+  if (desc.includes('rain') || desc.includes('drizzle') || desc.includes('shower') || (code && ((code >= 51 && code <= 65) || (code >= 80 && code <= 82) || (code >= 263 && code <= 308) || (code >= 353 && code <= 359)))) {
+    return { text: text || 'Rain', icon: 'cloud-rain' };
+  }
+  if (desc.includes('fog') || desc.includes('mist') || desc.includes('haze') || (code && ((code >= 45 && code <= 48) || code === 143 || code === 248))) {
+    return { text: text || 'Foggy', icon: 'cloud-fog' };
+  }
+  if (desc.includes('partly') || desc.includes('scattered') || code === 2 || code === 116) {
+    return { text: text || 'Partly Cloudy', icon: 'cloud-sun' };
+  }
+  if (desc.includes('cloud') || desc.includes('overcast') || code === 3 || code === 119 || code === 122) {
+    return { text: text || 'Cloudy', icon: 'cloud' };
+  }
+  if (desc.includes('sun') || desc.includes('clear') || code === 0 || code === 1 || code === 113) {
+    return { text: text || 'Clear', icon: 'sun' };
+  }
+  if (code !== undefined) {
+    return getWmoCondition(code);
+  }
+  return { text: text || 'Clear', icon: 'sun' };
+}
+
 export interface GeocodeResult {
   name: string;
   lat: number;
@@ -392,52 +421,192 @@ function setStoredWeatherCache(lat: number, lon: number, units: 'F' | 'C', data:
 }
 
 /**
- * Fetches current weather and 4-day forecast from Open-Meteo.
- * Includes intelligent coordinate-resolution, request abort timeout,
- * and resilient local caching.
+ * Fetches real station observation data from wttr.in (WorldWeatherOnline/METAR engine).
+ * Completely free, no API key required, with native CORS enabled.
+ * Takes direct municipality names (e.g. "Elora, Ontario") without requiring coordinates.
  */
-export async function fetchLiveWeather(
-  lat: number = 40.7128,
-  lon: number = -74.006,
-  cityName: string = 'New York',
-  units: 'F' | 'C' = 'F'
-): Promise<WeatherData> {
-  let targetLat = lat;
-  let targetLon = lon;
+export async function fetchWttrWeather(
+  locationQuery: string,
+  units: 'F' | 'C' = 'C'
+): Promise<WeatherData | null> {
+  const clean = locationQuery.trim();
+  if (!clean) return null;
 
-  // 1. Direct match in local dictionary for known cities (e.g. Elora, Fergus, Guelph)
-  if (cityName && cityName.trim()) {
-    const cleanLower = cityName.toLowerCase().trim();
-    const normalized = cleanLower
-      .replace(/,\s*[a-z]{2,}(\s+usa|\s+us|\s+ca|\s+canada)?$/i, '')
-      .trim();
-    const known = BUILTIN_CITIES[cleanLower] || BUILTIN_CITIES[normalized];
-    if (known) {
-      targetLat = known.lat;
-      targetLon = known.lon;
-    } else {
-      // 2. Check if passed coordinates are still default SF (37.7749) or NY (40.7128)
-      const isDefaultSf = Math.abs(lat - 37.7749) < 0.01 && Math.abs(lon - (-122.4194)) < 0.01;
-      const isDefaultNy = Math.abs(lat - 40.7128) < 0.01 && Math.abs(lon - (-74.006)) < 0.01;
-      const isSfName = cityName.toLowerCase().includes('san francisco');
-      if ((isDefaultSf && !isSfName) || isDefaultNy) {
-        try {
-          const resolved = await geocodeLocation(cityName);
-          if (resolved) {
-            targetLat = resolved.lat;
-            targetLon = resolved.lon;
-          }
-        } catch {
-          // retain passed coords
-        }
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://wttr.in/${encodeURIComponent(clean)}?format=j1`, {
+      signal: controller.signal,
+      headers: { 'Accept-Language': 'en' },
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) throw new Error(`wttr.in returned HTTP ${res.status}`);
+    const data = await res.json();
+    const current = data.current_condition?.[0];
+    if (!current) throw new Error('wttr.in returned no current condition');
+
+    const rawTemp = units === 'F' ? parseInt(current.temp_F, 10) : parseInt(current.temp_C, 10);
+    const temp = isNaN(rawTemp) ? (units === 'F' ? 70 : 20) : rawTemp;
+    const desc = current.weatherDesc?.[0]?.value?.trim() || 'Clear';
+    const code = parseInt(current.weatherCode, 10) || 113;
+    const condInfo = getWeatherConditionInfo(code, desc);
+    const humidity = parseInt(current.humidity, 10) || 50;
+
+    // Daily Forecasts
+    const weatherDays = data.weather || [];
+    const today = weatherDays[0];
+    const high = today
+      ? Math.round(units === 'F' ? parseFloat(today.maxtempF) : parseFloat(today.maxtempC))
+      : temp + 4;
+    const low = today
+      ? Math.round(units === 'F' ? parseFloat(today.mintempF) : parseFloat(today.mintempC))
+      : temp - 5;
+
+    const forecast: DailyForecast[] = [];
+    const maxDays = Math.min(5, weatherDays.length);
+    for (let i = 1; i < maxDays; i++) {
+      const day = weatherDays[i];
+      const dayDate = day.date;
+      let dayName = 'Day';
+      try {
+        const d = new Date(`${dayDate}T12:00:00`);
+        dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
+      } catch {
+        const d = new Date(Date.now() + i * 86400000);
+        dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
       }
-    }
-  }
 
+      // Midday hour index (approx index 4 is noon)
+      const noonHour = day.hourly?.[4] || day.hourly?.[0];
+      const dayDesc = noonHour?.weatherDesc?.[0]?.value?.trim() || 'Clear';
+      const dayCode = parseInt(noonHour?.weatherCode || '113', 10);
+      const dayCond = getWeatherConditionInfo(dayCode, dayDesc);
+      const dayMax = Math.round(units === 'F' ? parseFloat(day.maxtempF) : parseFloat(day.maxtempC));
+      const dayMin = Math.round(units === 'F' ? parseFloat(day.mintempF) : parseFloat(day.mintempC));
+
+      forecast.push({
+        date: dayDate,
+        dayName,
+        tempMax: dayMax,
+        tempMin: dayMin,
+        condition: dayCond.text,
+        conditionCode: dayCode,
+        icon: dayCond.icon,
+      });
+    }
+
+    return {
+      temp,
+      condition: condInfo.text,
+      conditionCode: code,
+      high,
+      low,
+      humidity,
+      city: clean,
+      icon: condInfo.icon,
+      forecast,
+    };
+  } catch (err) {
+    console.warn('wttr.in request failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches hyper-local station weather data from WeatherAPI.com (if user provided an API key).
+ * Free tier offers 1,000,000 calls/month with no credit card required.
+ */
+export async function fetchWeatherApiCom(
+  apiKey: string,
+  locationQuery: string,
+  units: 'F' | 'C' = 'C'
+): Promise<WeatherData | null> {
+  const cleanKey = apiKey.trim();
+  const cleanLoc = locationQuery.trim();
+  if (!cleanKey || !cleanLoc) return null;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const url = `https://api.weatherapi.com/v1/forecast.json?key=${encodeURIComponent(
+      cleanKey
+    )}&q=${encodeURIComponent(cleanLoc)}&days=5&aqi=no&alerts=no`;
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) throw new Error(`WeatherAPI.com returned HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.current || !data.forecast?.forecastday) throw new Error('Invalid WeatherAPI payload');
+
+    const temp = Math.round(units === 'F' ? data.current.temp_f : data.current.temp_c);
+    const condText = data.current.condition?.text?.trim() || 'Clear';
+    const condCode = data.current.condition?.code || 1000;
+    const condInfo = getWeatherConditionInfo(condCode, condText);
+    const today = data.forecast.forecastday[0]?.day;
+    const high = Math.round(units === 'F' ? today?.maxtemp_f ?? temp + 4 : today?.maxtemp_c ?? temp + 4);
+    const low = Math.round(units === 'F' ? today?.mintemp_f ?? temp - 5 : today?.mintemp_c ?? temp - 5);
+    const humidity = data.current.humidity || 50;
+
+    const forecast: DailyForecast[] = [];
+    const days = data.forecast.forecastday.slice(1, 5);
+    for (const dayItem of days) {
+      let dayName = 'Day';
+      try {
+        const d = new Date(`${dayItem.date}T12:00:00`);
+        dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
+      } catch {
+        dayName = 'Day';
+      }
+      const dayCondText = dayItem.day?.condition?.text?.trim() || 'Clear';
+      const dayCondCode = dayItem.day?.condition?.code || 1000;
+      const dayCond = getWeatherConditionInfo(dayCondCode, dayCondText);
+      forecast.push({
+        date: dayItem.date,
+        dayName,
+        tempMax: Math.round(units === 'F' ? dayItem.day?.maxtemp_f : dayItem.day?.maxtemp_c),
+        tempMin: Math.round(units === 'F' ? dayItem.day?.mintemp_f : dayItem.day?.mintemp_c),
+        condition: dayCond.text,
+        conditionCode: dayCondCode,
+        icon: dayCond.icon,
+      });
+    }
+
+    const locDisplayName = data.location?.name
+      ? `${data.location.name}, ${data.location.region || data.location.country}`
+      : cleanLoc;
+
+    return {
+      temp,
+      condition: condInfo.text,
+      conditionCode: condCode,
+      high,
+      low,
+      humidity,
+      city: locDisplayName,
+      icon: condInfo.icon,
+      forecast,
+    };
+  } catch (err) {
+    console.warn('WeatherAPI.com request error:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches high-resolution meteorological weather from Open-Meteo using Environment Canada (GEM)
+ * and ECMWF forecast models with automatic coordinate resolution.
+ */
+export async function fetchOpenMeteoWeather(
+  lat: number,
+  lon: number,
+  cityName: string,
+  units: 'F' | 'C' = 'C'
+): Promise<WeatherData | null> {
   const tempUnitParam = units === 'F' ? '&temperature_unit=fahrenheit' : '';
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${targetLat.toFixed(
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(
     4
-  )}&longitude=${targetLon.toFixed(
+  )}&longitude=${lon.toFixed(
     4
   )}&current=temperature_2m,relative_humidity_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto${tempUnitParam}`;
 
@@ -447,7 +616,7 @@ export async function fetchLiveWeather(
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeoutId);
 
-    if (!res.ok) throw new Error(`Weather API error HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Open-Meteo returned HTTP ${res.status}`);
     const data = await res.json();
 
     const currentCode = data.current?.weather_code ?? 0;
@@ -457,7 +626,7 @@ export async function fetchLiveWeather(
     const low = Math.round(data.daily?.temperature_2m_min?.[0] ?? temp - 6);
     const humidity = Math.round(data.current?.relative_humidity_2m ?? 45);
 
-    // Extract next 4-day forecast outlook (indices 1 through 4)
+    // Extract next 4-day forecast outlook
     const forecast: DailyForecast[] = [];
     const dailyTimes = data.daily?.time || [];
     const dailyCodes = data.daily?.weather_code || [];
@@ -495,7 +664,7 @@ export async function fetchLiveWeather(
       });
     }
 
-    const weatherData: WeatherData = {
+    return {
       temp,
       condition: cond.text,
       conditionCode: currentCode,
@@ -506,55 +675,127 @@ export async function fetchLiveWeather(
       icon: cond.icon,
       forecast,
     };
+  } catch (err) {
+    console.warn('Open-Meteo request error:', err);
+    return null;
+  }
+}
 
-    setStoredWeatherCache(targetLat, targetLon, units, weatherData);
-    return weatherData;
-  } catch (error) {
-    console.warn('Network issue fetching live weather, checking cache:', error);
+/**
+ * Universal Multi-Provider Weather Fetcher:
+ * 1. WeatherAPI.com (if API key is supplied by user).
+ * 2. wttr.in (live station observations, queried directly by municipality name, keyless, CORS enabled).
+ * 3. Open-Meteo (high-resolution meteorological models with intelligent coordinate resolution).
+ * 4. Coordinate & unit-keyed localStorage cache.
+ * 5. Realistic baseline fallback.
+ */
+export async function fetchLiveWeather(
+  lat: number = 43.6834,
+  lon: number = -80.4329,
+  cityName: string = 'Elora, Ontario',
+  units: 'F' | 'C' = 'C',
+  apiKey?: string,
+  preferredProvider: 'auto' | 'wttr' | 'openmeteo' | 'weatherapi' = 'auto'
+): Promise<WeatherData> {
+  const cleanCity = cityName.trim() || 'Elora, Ontario';
 
-    const cached = getStoredWeatherCache(targetLat, targetLon, units);
-    if (cached) {
-      return {
-        ...cached,
-        city: cityName || cached.city,
-      };
+  // Resolve target coordinates
+  let targetLat = lat;
+  let targetLon = lon;
+
+  const cleanLower = cleanCity.toLowerCase();
+  const normalized = cleanLower
+    .replace(/,\s*[a-z]{2,}(\s+usa|\s+us|\s+ca|\s+canada)?$/i, '')
+    .trim();
+  const known = BUILTIN_CITIES[cleanLower] || BUILTIN_CITIES[normalized];
+  if (known) {
+    targetLat = known.lat;
+    targetLon = known.lon;
+  } else {
+    const isDefaultSf = Math.abs(lat - 37.7749) < 0.01 && Math.abs(lon - (-122.4194)) < 0.01;
+    const isDefaultNy = Math.abs(lat - 40.7128) < 0.01 && Math.abs(lon - (-74.006)) < 0.01;
+    const isSfName = cleanCity.toLowerCase().includes('san francisco');
+    if ((isDefaultSf && !isSfName) || isDefaultNy) {
+      try {
+        const resolved = await geocodeLocation(cleanCity);
+        if (resolved) {
+          targetLat = resolved.lat;
+          targetLon = resolved.lon;
+        }
+      } catch {
+        // retain
+      }
     }
+  }
 
-    // Realistic seasonal baseline fallback
-    const fallbackForecast: DailyForecast[] = [1, 2, 3, 4].map((offset) => {
-      const d = new Date(Date.now() + offset * 86400000);
-      const dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
-      const offsets = [
-        { max: 74, min: 58, cond: 'Partly Cloudy', code: 2, icon: 'cloud-sun' },
-        { max: 76, min: 59, cond: 'Clear Sky', code: 0, icon: 'sun' },
-        { max: 71, min: 55, cond: 'Rain Showers', code: 61, icon: 'cloud-rain' },
-        { max: 73, min: 57, cond: 'Mainly Clear', code: 1, icon: 'sun' },
-      ];
-      const sample = offsets[offset - 1] || offsets[0];
-      const tempMax = units === 'F' ? sample.max : Math.round(((sample.max - 32) * 5) / 9);
-      const tempMin = units === 'F' ? sample.min : Math.round(((sample.min - 32) * 5) / 9);
+  // 1. WeatherAPI.com (if key provided or chosen)
+  if ((apiKey || preferredProvider === 'weatherapi') && apiKey?.trim()) {
+    const wApiRes = await fetchWeatherApiCom(apiKey, cleanCity, units);
+    if (wApiRes) {
+      setStoredWeatherCache(targetLat, targetLon, units, wApiRes);
+      return wApiRes;
+    }
+  }
 
-      return {
-        date: d.toISOString().split('T')[0],
-        dayName,
-        tempMax,
-        tempMin,
-        condition: sample.cond,
-        conditionCode: sample.code,
-        icon: sample.icon,
-      };
-    });
+  // 2. wttr.in (Primary live station observation by municipality name)
+  if (preferredProvider === 'auto' || preferredProvider === 'wttr') {
+    const wttrRes = await fetchWttrWeather(cleanCity, units);
+    if (wttrRes) {
+      setStoredWeatherCache(targetLat, targetLon, units, wttrRes);
+      return wttrRes;
+    }
+  }
 
+  // 3. Open-Meteo (high-resolution model fallback)
+  const omRes = await fetchOpenMeteoWeather(targetLat, targetLon, cleanCity, units);
+  if (omRes) {
+    setStoredWeatherCache(targetLat, targetLon, units, omRes);
+    return omRes;
+  }
+
+  // 4. Stored Cache Fallback
+  const cached = getStoredWeatherCache(targetLat, targetLon, units);
+  if (cached) {
     return {
-      temp: units === 'F' ? 70 : 21,
-      condition: 'Partly Cloudy',
-      conditionCode: 2,
-      high: units === 'F' ? 75 : 24,
-      low: units === 'F' ? 58 : 14,
-      humidity: 50,
-      city: cityName,
-      icon: 'cloud-sun',
-      forecast: fallbackForecast,
+      ...cached,
+      city: cleanCity || cached.city,
     };
   }
+
+  // 5. Seasonal fallback
+  const fallbackForecast: DailyForecast[] = [1, 2, 3, 4].map((offset) => {
+    const d = new Date(Date.now() + offset * 86400000);
+    const dayName = d.toLocaleDateString(undefined, { weekday: 'short' });
+    const offsets = [
+      { max: 70, min: 52, cond: 'Partly Cloudy', code: 2, icon: 'cloud-sun' },
+      { max: 68, min: 50, cond: 'Clear Sky', code: 0, icon: 'sun' },
+      { max: 65, min: 48, cond: 'Rain Showers', code: 61, icon: 'cloud-rain' },
+      { max: 66, min: 49, cond: 'Mainly Clear', code: 1, icon: 'sun' },
+    ];
+    const sample = offsets[offset - 1] || offsets[0];
+    const tempMax = units === 'F' ? sample.max : Math.round(((sample.max - 32) * 5) / 9);
+    const tempMin = units === 'F' ? sample.min : Math.round(((sample.min - 32) * 5) / 9);
+
+    return {
+      date: d.toISOString().split('T')[0],
+      dayName,
+      tempMax,
+      tempMin,
+      condition: sample.cond,
+      conditionCode: sample.code,
+      icon: sample.icon,
+    };
+  });
+
+  return {
+    temp: units === 'F' ? 64 : 18,
+    condition: 'Partly Cloudy',
+    conditionCode: 2,
+    high: units === 'F' ? 68 : 20,
+    low: units === 'F' ? 50 : 10,
+    humidity: 60,
+    city: cleanCity,
+    icon: 'cloud-sun',
+    forecast: fallbackForecast,
+  };
 }

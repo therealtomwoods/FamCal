@@ -101,6 +101,8 @@ export interface AppSettings {
   weatherLat: number;
   weatherLon: number;
   weatherUnits: 'F' | 'C';
+  weatherProvider?: 'auto' | 'wttr' | 'openmeteo' | 'weatherapi';
+  weatherApiKey?: string;
   monitoredStock: string; // Single monitored ticker e.g. "SPY" or "AAPL"
   isKioskFramed: boolean; // frame in 9:16 aspect box on wide screens
   isDemoMode: boolean;

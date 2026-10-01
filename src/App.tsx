@@ -61,15 +61,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   showWeather: true,
   showStockTicker: true,
   showDigitalClock: true,
-  weatherLocation: 'San Francisco, CA',
-  weatherLat: 37.7749,
-  weatherLon: -122.4194,
-  weatherUnits: 'F',
-  monitoredStock: 'SPY',
+  weatherLocation: 'Elora, Ontario',
+  weatherLat: 43.6834,
+  weatherLon: -80.4329,
+  weatherUnits: 'C',
+  weatherProvider: 'auto',
+  monitoredStock: 'GOOGL',
   isKioskFramed: true,
   isDemoMode: false,
   militaryTime: false,
-  familyAgendaTitle: 'Family Agenda',
+  familyAgendaTitle: 'Woods Agenda',
 };
 
 export const App: React.FC = () => {
@@ -219,7 +220,7 @@ export const App: React.FC = () => {
     });
   }, [settings.weatherLocation, settings.weatherLat, settings.weatherLon]);
 
-  // Weather fetcher
+  // Weather fetcher (Multi-provider wttr.in + Open-Meteo + optional WeatherAPI.com)
   useEffect(() => {
     if (!settings.showWeather) return;
 
@@ -227,7 +228,9 @@ export const App: React.FC = () => {
       settings.weatherLat,
       settings.weatherLon,
       settings.weatherLocation,
-      settings.weatherUnits
+      settings.weatherUnits,
+      settings.weatherApiKey,
+      settings.weatherProvider
     ).then((res) => setWeather(res));
 
     const interval = setInterval(() => {
@@ -235,12 +238,22 @@ export const App: React.FC = () => {
         settings.weatherLat,
         settings.weatherLon,
         settings.weatherLocation,
-        settings.weatherUnits
+        settings.weatherUnits,
+        settings.weatherApiKey,
+        settings.weatherProvider
       ).then((res) => setWeather(res));
     }, 15 * 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [settings.showWeather, settings.weatherLat, settings.weatherLon, settings.weatherLocation, settings.weatherUnits]);
+  }, [
+    settings.showWeather,
+    settings.weatherLat,
+    settings.weatherLon,
+    settings.weatherLocation,
+    settings.weatherUnits,
+    settings.weatherApiKey,
+    settings.weatherProvider,
+  ]);
 
   // Real Live Stock Quote fetcher
   useEffect(() => {
