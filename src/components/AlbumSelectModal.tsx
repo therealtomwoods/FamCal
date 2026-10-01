@@ -25,6 +25,7 @@ interface AlbumSelectModalProps {
   onCancelPicker?: () => void;
   isLaunchingPicker?: boolean;
   pickedPhotosCount?: number;
+  isSessionExpired?: boolean;
 }
 
 export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
@@ -41,6 +42,7 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
   onCancelPicker,
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
+  isSessionExpired = false,
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -88,6 +90,19 @@ export const AlbumSelectModal: React.FC<AlbumSelectModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* 7-Day Session Expired Alert */}
+        {isSessionExpired && (
+          <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-950/70 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-white">Google Photos Selection Expired (7-Day Limit)</p>
+              <p className="text-slate-300 leading-relaxed">
+                Google limits picker sessions to 7 days. Tap <strong>"Select Photos from Google Photos"</strong> below to refresh your family photo selection.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Feature Banner: Google Photos Picker API (New Official Flow) */}
         <div className="p-4 bg-gradient-to-r from-pink-950/60 via-purple-950/40 to-slate-900 border-b border-white/10 space-y-3">

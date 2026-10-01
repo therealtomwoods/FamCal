@@ -20,6 +20,9 @@ import {
   clearStoredSession,
   triggerGoogleSignIn,
   UserProfile,
+  isTokenExpired,
+  requestSilentTokenRefresh,
+  ensureValidAccessToken,
 } from './services/googleAuth';
 import {
   fetchUserCalendars,
@@ -37,6 +40,7 @@ import {
   saveStoredPickedPhotos,
   clearStoredPickedPhotos,
   hydratePhotosWithImages,
+  refreshPhotoUrls,
 } from './services/googlePhotos';
 import { fetchLiveWeather, detectBrowserLocation, geocodeLocation } from './services/weatherService';
 import { fetchSingleStockQuote } from './services/stockService';
@@ -106,6 +110,9 @@ export const App: React.FC = () => {
       : undefined
   );
   const [isLaunchingPicker, setIsLaunchingPicker] = useState<boolean>(false);
+  const [isPhotosSessionExpired, setIsPhotosSessionExpired] = useState<boolean>(() => {
+    return localStorage.getItem('famcal_picker_session_expired') === 'true';
+  });
 
   // Widgets Data
   const [weather, setWeather] = useState<WeatherData | null>(null);
@@ -125,7 +132,52 @@ export const App: React.FC = () => {
     });
   };
 
-  // 1. Load high-resolution cached photos from IndexedDB on startup
+  // 1. Proactive Google OAuth Token Silent Renewal (runs on startup if expired, and checks every 15 minutes)
+  useEffect(() => {
+    if (!settings.googleClientId || settings.isDemoMode) return;
+
+    const renewTokenIfNeeded = async () => {
+      if (isTokenExpired(600000)) {
+        console.log('Google access token expired or expiring soon, requesting silent renewal...');
+        const fresh = await requestSilentTokenRefresh(
+          settings.googleClientId,
+          (newToken, newProfile) => {
+            setUserToken(newToken);
+            if (newProfile) setUserProfile(newProfile);
+          }
+        );
+        if (fresh) {
+          setUserToken(fresh);
+        }
+      }
+    };
+
+    renewTokenIfNeeded();
+    const interval = setInterval(renewTokenIfNeeded, 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [settings.googleClientId, settings.isDemoMode]);
+
+  // Reactive photo baseUrls refresh handler (invoked when Slideshow encounters a photo error)
+  const lastPhotoRefreshTriggerRef = useRef<number>(0);
+  const handlePhotosNeedRefresh = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastPhotoRefreshTriggerRef.current < 25000) return; // 25s debounce
+    lastPhotoRefreshTriggerRef.current = now;
+
+    console.log('Slideshow reported photo load error. Proactively fetching fresh baseUrls...');
+    const activeTok = (await ensureValidAccessToken(settings.googleClientId)) || userToken;
+    if (!activeTok) return;
+
+    const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId);
+    if (res.success && res.photos.length > 0) {
+      setPhotos(res.photos);
+      setIsPhotosSessionExpired(false);
+    } else if (res.sessionExpired) {
+      setIsPhotosSessionExpired(true);
+    }
+  }, [settings.googleClientId, userToken, settings.selectedAlbumId]);
+
+  // 2. Load high-resolution cached photos from IndexedDB on startup
   useEffect(() => {
     loadStoredPhotos().then((stored) => {
       if (stored && stored.length > 0) {
@@ -292,8 +344,8 @@ export const App: React.FC = () => {
 
   // Load calendar & photo data
   const refreshData = useCallback(async () => {
-    // If user has not signed in with Google, or explicitly toggled demo mode
-    if (settings.isDemoMode || !userToken) {
+    // If user explicitly enabled Demo Mode or has no Google configuration
+    if (settings.isDemoMode || (!userToken && !settings.googleClientId)) {
       setCalendars(DEMO_CALENDARS);
       const allDemo = getDemoEvents();
       const filtered = allDemo.filter((e) => selectedCalendarIds.includes(e.calendarId));
@@ -305,11 +357,28 @@ export const App: React.FC = () => {
       return;
     }
 
+    // Ensure valid token before making Google API calls
+    let activeToken = userToken;
+    if (settings.googleClientId) {
+      const ensured = await ensureValidAccessToken(settings.googleClientId);
+      if (ensured) {
+        activeToken = ensured;
+        if (ensured !== userToken) {
+          setUserToken(ensured);
+        }
+      }
+    }
+
+    if (!activeToken) {
+      console.warn('Google token renewal pending; keeping existing views active');
+      return;
+    }
+
     // Google Live Data
     setIsLoadingEvents(true);
     try {
       // 1. Fetch Calendars
-      const fetchedCalendars = await fetchUserCalendars(userToken);
+      const fetchedCalendars = await fetchUserCalendars(activeToken);
       setCalendars(fetchedCalendars);
 
       const activeIds =
@@ -319,14 +388,14 @@ export const App: React.FC = () => {
 
       // 2. Fetch Events for active calendars
       const fetchedEvents = await fetchAllSelectedCalendarEvents(
-        userToken,
+        activeToken,
         fetchedCalendars,
         activeIds
       );
       setEvents(fetchedEvents);
 
       // 3. Fetch Photos Albums
-      const albumResult = await fetchUserPhotoAlbums(userToken);
+      const albumResult = await fetchUserPhotoAlbums(activeToken);
       setAlbums(albumResult.albums);
       if (albumResult.success) {
         setPhotosStatus({
@@ -340,23 +409,35 @@ export const App: React.FC = () => {
         });
       }
 
-      // 4. Fetch Media Items for selected album (or PICKED_GOOGLE_PHOTOS if available)
-      const currentStored = await loadStoredPhotos();
-      if (currentStored.length > 0 && (!settings.selectedAlbumId || settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS' || settings.selectedAlbumId === 'ALL_LIBRARY_PHOTOS')) {
-        setPhotos(currentStored);
-      } else {
-        const albumToLoad =
-          settings.selectedAlbumId && settings.selectedAlbumId !== 'album-family-vacation'
-            ? settings.selectedAlbumId
-            : currentStored.length > 0
-            ? 'PICKED_GOOGLE_PHOTOS'
-            : albumResult.albums[0]?.id || 'ALL_LIBRARY_PHOTOS';
+      // 4. Photos BaseUrl Refresh Check & Loading
+      const lastPhotoFetch = parseInt(localStorage.getItem('famcal_photos_fetched_at') || '0', 10);
+      const photoAgeMs = Date.now() - lastPhotoFetch;
+      const isPicked =
+        !settings.selectedAlbumId ||
+        settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS' ||
+        settings.selectedAlbumId === 'ALL_LIBRARY_PHOTOS';
 
-        const fetchedPhotos = await fetchAlbumPhotos(userToken, albumToLoad);
-        if (fetchedPhotos.length > 0) {
-          setPhotos(fetchedPhotos);
-        } else if (currentStored.length > 0) {
-          setPhotos(currentStored);
+      // If photo baseUrls are older than 40 minutes (Google expires them in 60m), refresh them from Google
+      if (photoAgeMs > 40 * 60 * 1000) {
+        console.log('Photo baseUrls older than 40m, refreshing from Google...');
+        const refreshResult = await refreshPhotoUrls(activeToken, settings.selectedAlbumId);
+        if (refreshResult.success && refreshResult.photos.length > 0) {
+          setPhotos(refreshResult.photos);
+          setIsPhotosSessionExpired(false);
+        } else if (refreshResult.sessionExpired) {
+          setIsPhotosSessionExpired(true);
+        }
+      } else {
+        const currentStored = await loadStoredPhotos();
+        if (currentStored.length > 0 && isPicked) {
+          if (photos.length === 0) {
+            setPhotos(currentStored);
+          }
+        } else if (!isPicked) {
+          const fetchedPhotos = await fetchAlbumPhotos(activeToken, settings.selectedAlbumId);
+          if (fetchedPhotos.length > 0) {
+            setPhotos(fetchedPhotos);
+          }
         }
       }
     } catch (err) {
@@ -364,7 +445,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoadingEvents(false);
     }
-  }, [settings.isDemoMode, userToken, selectedCalendarIds, settings.selectedAlbumId]);
+  }, [settings.isDemoMode, settings.googleClientId, userToken, selectedCalendarIds, settings.selectedAlbumId, photos.length]);
 
   // Initial load and periodic refresh
   useEffect(() => {
@@ -485,6 +566,7 @@ export const App: React.FC = () => {
     clearStoredPickedPhotos(userToken);
     setUserToken(null);
     setUserProfile(null);
+    setIsPhotosSessionExpired(false);
     updateSettings({ isDemoMode: true });
     refreshData();
   };
@@ -553,6 +635,8 @@ export const App: React.FC = () => {
             intervalSeconds={settings.slideshowInterval}
             onOpenAlbumPicker={() => setIsAlbumSelectOpen(true)}
             userToken={userToken}
+            onPhotosNeedRefresh={handlePhotosNeedRefresh}
+            isSessionExpired={isPhotosSessionExpired}
           />
 
           {/* Top-Right Large Clock */}
@@ -624,6 +708,7 @@ export const App: React.FC = () => {
         onCancelPicker={handleCancelPicker}
         isLaunchingPicker={isLaunchingPicker}
         pickedPhotosCount={photos.length}
+        isSessionExpired={isPhotosSessionExpired}
       />
 
       <SettingsModal
@@ -645,6 +730,7 @@ export const App: React.FC = () => {
         isLaunchingPicker={isLaunchingPicker}
         pickedPhotosCount={photos.length}
         photosStatus={photosStatus}
+        isSessionExpired={isPhotosSessionExpired}
       />
     </div>
   );

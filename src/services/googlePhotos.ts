@@ -168,6 +168,8 @@ export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
  */
 export function clearStoredPickedPhotos(token?: string | null): void {
   localStorage.removeItem(PICKED_PHOTOS_KEY);
+  localStorage.removeItem('famcal_photos_fetched_at');
+  localStorage.removeItem('famcal_picker_session_expired');
   const sessionId = localStorage.getItem('famcal_picker_session_id');
   if (sessionId) {
     localStorage.removeItem('famcal_picker_session_id');
@@ -466,6 +468,9 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
         }
         const errText = await res.text();
         console.warn(`Picker mediaItems fetch error (status ${res.status}):`, errText);
+        if (res.status === 404 || res.status === 400 || res.status === 410) {
+          throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
+        }
         break;
       }
 
@@ -507,11 +512,10 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
 }
 
 /**
- * Processes selected photos with immediate fast playback and background streaming:
- * 1. Saves all raw photo metadata immediately so all photos (hundreds) are recognized.
- * 2. High-priority hydrates the first 8 photos so slideshow starts playing in ~1-2 seconds.
- * 3. Background streams and caches the remaining photos into IndexedDB without freezing the UI.
- * 4. Calls onPhotosUpdated whenever a batch finishes so the active slideshow UI updates seamlessly.
+ * Processes selected photos with immediate fast playback:
+ * 1. Saves all raw photo metadata immediately so all photos (hundreds) are recognized and playable.
+ * 2. Immediately saves to IndexedDB and localStorage with fresh fetch timestamp.
+ * 3. Notifies callers so the active slideshow UI updates seamlessly without freezing.
  */
 async function processAndStreamPickedPhotos(
   rawPhotos: PhotoItem[],
@@ -522,43 +526,102 @@ async function processAndStreamPickedPhotos(
   // 1. Immediately save the full list to IndexedDB and localStorage
   saveStoredPickedPhotos(rawPhotos);
   savePhotosToIndexedDB(rawPhotos);
+  localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
+  localStorage.removeItem('famcal_picker_session_expired');
 
-  // 2. High-priority hydration for first 8 photos to start slideshow immediately
-  const initialBatchCount = Math.min(8, rawPhotos.length);
-  onStatusUpdate?.(`Preparing first ${initialBatchCount} of ${rawPhotos.length} photos...`);
+  onPhotosUpdated?.(rawPhotos);
+  onStatusUpdate?.(`✓ Successfully loaded ${rawPhotos.length} family photos!`);
 
-  const initialItems = rawPhotos.slice(0, initialBatchCount);
-  const hydratedInitial = await hydratePhotosWithImages(initialItems, token);
+  // Optional background hydration for any local caching if supported
+  setTimeout(() => {
+    hydratePhotosWithImages(
+      rawPhotos,
+      token,
+      undefined,
+      (updated) => {
+        saveStoredPickedPhotos(updated);
+        savePhotosToIndexedDB(updated);
+        onPhotosUpdated?.(updated);
+      }
+    ).catch(() => {});
+  }, 500);
 
-  const fullList = [...rawPhotos];
-  for (let i = 0; i < hydratedInitial.length; i++) {
-    fullList[i] = hydratedInitial[i];
+  return rawPhotos;
+}
+
+/**
+ * Proactively or reactively refreshes Google Photos baseUrls before or after the 60-minute expiry
+ */
+export async function refreshPhotoUrls(
+  token: string,
+  currentAlbumId?: string
+): Promise<{ success: boolean; photos: PhotoItem[]; sessionExpired?: boolean }> {
+  if (!token) return { success: false, photos: [] };
+
+  const pickerSessionId = localStorage.getItem('famcal_picker_session_id');
+  const isPickedAlbum =
+    !currentAlbumId ||
+    currentAlbumId === 'PICKED_GOOGLE_PHOTOS' ||
+    currentAlbumId === 'ALL_LIBRARY_PHOTOS';
+
+  // 1. Refresh from active picker session (valid for 7 days)
+  if (pickerSessionId && isPickedAlbum) {
+    try {
+      const cleanId = pickerSessionId.replace(/^sessions\//, '');
+      const freshPhotos = await fetchPickerSelectedMediaItems(token, cleanId);
+
+      if (freshPhotos && freshPhotos.length > 0) {
+        const existing = await loadStoredPhotos();
+        const existingMap = new Map(existing.map((p) => [p.id, p]));
+
+        const merged = freshPhotos.map((fresh) => {
+          const old = existingMap.get(fresh.id);
+          return {
+            ...fresh,
+            caption: old?.caption || fresh.caption,
+            dateTaken: old?.dateTaken || fresh.dateTaken,
+          };
+        });
+
+        saveStoredPickedPhotos(merged);
+        savePhotosToIndexedDB(merged);
+        localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
+        localStorage.removeItem('famcal_picker_session_expired');
+        console.log(`✓ Successfully refreshed ${merged.length} photo baseUrls from Google Photos Picker session`);
+        return { success: true, photos: merged };
+      }
+    } catch (err: any) {
+      console.warn('Failed to refresh picker photos from session:', err);
+      if (
+        err?.message?.includes('PICKER_SESSION_EXPIRED') ||
+        err?.message?.includes('404') ||
+        err?.message?.includes('400') ||
+        err?.message?.includes('410')
+      ) {
+        localStorage.setItem('famcal_picker_session_expired', 'true');
+        return { success: false, photos: [], sessionExpired: true };
+      }
+    }
   }
 
-  saveStoredPickedPhotos(fullList);
-  savePhotosToIndexedDB(fullList);
-  onPhotosUpdated?.([...fullList]);
-
-  // 3. If there are more photos, stream remaining photos in the background
-  if (rawPhotos.length > initialBatchCount) {
-    onStatusUpdate?.(`✓ Playing first photos! Streaming remaining ${rawPhotos.length - initialBatchCount} in background...`);
-    setTimeout(() => {
-      hydratePhotosWithImages(
-        fullList,
-        token,
-        (progress) => onStatusUpdate?.(progress),
-        (updated) => {
-          saveStoredPickedPhotos(updated);
-          savePhotosToIndexedDB(updated);
-          onPhotosUpdated?.(updated);
-        }
-      ).catch((err) => console.warn('Background streaming hydration failed:', err));
-    }, 150);
-  } else {
-    onStatusUpdate?.(`✓ Successfully loaded ${fullList.length} photos!`);
+  // 2. Refresh from legacy album
+  if (
+    currentAlbumId &&
+    currentAlbumId !== 'PICKED_GOOGLE_PHOTOS' &&
+    !currentAlbumId.startsWith('album-family')
+  ) {
+    try {
+      const freshAlbumPhotos = await fetchAlbumPhotos(token, currentAlbumId);
+      if (freshAlbumPhotos.length > 0) {
+        localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
+        return { success: true, photos: freshAlbumPhotos };
+      }
+    } catch (err) {
+      console.warn('Failed to refresh album photos:', err);
+    }
   }
 
-  return fullList;
+  return { success: false, photos: [] };
 }
 
 /**

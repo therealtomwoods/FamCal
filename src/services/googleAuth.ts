@@ -59,15 +59,19 @@ export const GOOGLE_SCOPES = [
 ].join(' ');
 
 export function getStoredAccessToken(): string | null {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const expiry = localStorage.getItem(EXPIRY_KEY);
-  if (!token || !expiry) return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
 
-  if (Date.now() > parseInt(expiry, 10)) {
-    clearStoredSession();
-    return null;
-  }
-  return token;
+export function isTokenExpired(bufferMs: number = 60000): boolean {
+  const expiry = localStorage.getItem(EXPIRY_KEY);
+  if (!expiry) return true;
+  return Date.now() > (parseInt(expiry, 10) - bufferMs);
+}
+
+export function getTokenRemainingMs(): number {
+  const expiry = localStorage.getItem(EXPIRY_KEY);
+  if (!expiry) return 0;
+  return Math.max(0, parseInt(expiry, 10) - Date.now());
 }
 
 export function getStoredGrantedScopes(): string {
@@ -84,8 +88,8 @@ export function getStoredUserProfile(): UserProfile | null {
     }
   }
 
-  // If token is valid, provide baseline profile so UI stays connected
-  if (getStoredAccessToken()) {
+  // If token is present in storage, provide baseline profile so UI stays connected
+  if (localStorage.getItem(TOKEN_KEY)) {
     return {
       name: 'Google Account',
       email: 'Connected',
@@ -101,6 +105,126 @@ export function clearStoredSession(): void {
   localStorage.removeItem(EXPIRY_KEY);
   localStorage.removeItem(USER_KEY);
   localStorage.removeItem(SCOPES_KEY);
+  tokenClientInstance = null;
+}
+
+let isRefreshingSilent = false;
+let refreshResolvers: Array<(token: string | null) => void> = [];
+
+export function requestSilentTokenRefresh(
+  clientId: string,
+  onToken?: (token: string, profile?: UserProfile) => void
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!clientId || clientId.trim() === '') {
+      return resolve(null);
+    }
+
+    refreshResolvers.push(resolve);
+    if (isRefreshingSilent) {
+      return; // Refresh already in-flight, will resolve when complete
+    }
+    isRefreshingSilent = true;
+
+    const finishAll = (token: string | null) => {
+      isRefreshingSilent = false;
+      const resolvers = [...refreshResolvers];
+      refreshResolvers = [];
+      resolvers.forEach((res) => res(token));
+    };
+
+    const attemptGIS = (retries = 20) => {
+      if (window.google?.accounts?.oauth2) {
+        try {
+          tokenClientInstance = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientId.trim(),
+            scope: GOOGLE_SCOPES,
+            callback: (tokenResponse: TokenResponse) => {
+              if (tokenResponse.error) {
+                console.warn('Silent OAuth refresh error:', tokenResponse.error, tokenResponse.error_description);
+                finishAll(null);
+                return;
+              }
+              if (tokenResponse.access_token) {
+                const expiresInMs = (tokenResponse.expires_in || 3600) * 1000;
+                const expiryTime = Date.now() + expiresInMs;
+                localStorage.setItem(TOKEN_KEY, tokenResponse.access_token);
+                localStorage.setItem(EXPIRY_KEY, expiryTime.toString());
+                if (tokenResponse.scope) {
+                  localStorage.setItem(SCOPES_KEY, tokenResponse.scope);
+                }
+
+                // Preserve existing user profile name/picture if already stored
+                const existing = getStoredUserProfile();
+                const baselineProfile: UserProfile = {
+                  name: existing?.name && existing.name !== 'Google Account' ? existing.name : 'Google Account',
+                  email: existing?.email && existing.email !== 'Connected' ? existing.email : 'Connected',
+                  picture: existing?.picture,
+                  grantedScopes: tokenResponse.scope,
+                };
+                localStorage.setItem(USER_KEY, JSON.stringify(baselineProfile));
+
+                if (onTokenReceivedCallback) {
+                  onTokenReceivedCallback(tokenResponse.access_token, baselineProfile);
+                }
+                if (onToken) {
+                  onToken(tokenResponse.access_token, baselineProfile);
+                }
+
+                fetchUserProfile(tokenResponse.access_token, tokenResponse.scope).then((fullProfile) => {
+                  if (fullProfile && onProfileReceivedCallback) {
+                    onProfileReceivedCallback(fullProfile);
+                  }
+                });
+
+                finishAll(tokenResponse.access_token);
+              } else {
+                finishAll(null);
+              }
+            },
+            error_callback: (err) => {
+              console.warn('Silent Google OAuth client error:', err);
+              finishAll(null);
+            }
+          });
+
+          // Request access token with prompt: '' for silent background renewal without popup
+          tokenClientInstance.requestAccessToken({ prompt: '' });
+
+          setTimeout(() => {
+            if (isRefreshingSilent) {
+              console.warn('Silent token refresh timed out');
+              finishAll(null);
+            }
+          }, 12000);
+        } catch (err) {
+          console.warn('Failed to start silent token refresh:', err);
+          finishAll(null);
+        }
+      } else if (retries > 0) {
+        setTimeout(() => attemptGIS(retries - 1), 250);
+      } else {
+        finishAll(null);
+      }
+    };
+
+    attemptGIS();
+  });
+}
+
+export async function ensureValidAccessToken(clientId: string): Promise<string | null> {
+  const currentToken = getStoredAccessToken();
+  if (currentToken && !isTokenExpired(300000)) {
+    // Current token is valid for at least 5 more minutes
+    return currentToken;
+  }
+
+  if (clientId && clientId.trim() !== '') {
+    const freshToken = await requestSilentTokenRefresh(clientId);
+    if (freshToken) return freshToken;
+  }
+
+  return currentToken;
 }
 
 export function initializeGoogleAuth(

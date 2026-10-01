@@ -40,6 +40,7 @@ interface SettingsModalProps {
   isLaunchingPicker?: boolean;
   pickedPhotosCount?: number;
   photosStatus?: { success: boolean; message: string };
+  isSessionExpired?: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -61,6 +62,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isLaunchingPicker = false,
   pickedPhotosCount = 0,
   photosStatus,
+  isSessionExpired = false,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
@@ -372,6 +374,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <RefreshCw className="w-3 h-3" /> Refresh
                   </button>
                 </div>
+
+                {/* 7-Day Session Expired Alert */}
+                {isSessionExpired && (
+                  <div className="p-3 rounded-xl bg-amber-950/70 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-bold text-white">Google Photos Selection Expired (7-Day Limit)</p>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        Google limits third-party picker access to 7 days. Tap <strong>"Select Photos from Google Photos"</strong> below to refresh your selection.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Primary Picker Action Button */}
                 <div className="p-3 rounded-xl bg-gradient-to-r from-pink-950/40 via-purple-950/30 to-slate-900 border border-pink-500/20 space-y-2">

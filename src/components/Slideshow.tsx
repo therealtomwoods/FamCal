@@ -8,6 +8,8 @@ interface SlideshowProps {
   intervalSeconds: number;
   onOpenAlbumPicker: () => void;
   userToken?: string | null;
+  onPhotosNeedRefresh?: () => void;
+  isSessionExpired?: boolean;
 }
 
 const isFileName = (text?: string, filename?: string): boolean => {
@@ -40,12 +42,19 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
   intervalSeconds,
   onOpenAlbumPicker,
+  onPhotosNeedRefresh,
+  isSessionExpired,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
   const [showLoadingBadge, setShowLoadingBadge] = useState(false);
+
+  // Auto-reset failed photo statuses whenever fresh URLs are loaded
+  useEffect(() => {
+    setFailedPhotoIds({});
+  }, [photos]);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -158,6 +167,17 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       return { ...prev, [photoKey]: true };
     });
 
+    const failedPhoto = photos?.[idx];
+    const isGooglePhoto =
+      failedPhoto?.url?.includes('googleusercontent.com') ||
+      failedPhoto?.baseUrl?.includes('googleusercontent.com') ||
+      failedPhoto?.url?.includes('photospicker.googleapis.com');
+
+    // If an active Google Photos URL failed (likely 403 expired baseUrl), alert parent to fetch fresh baseUrls
+    if (isGooglePhoto && onPhotosNeedRefresh) {
+      onPhotosNeedRefresh();
+    }
+
     // If the active visible photo failed, auto-advance to the next photo after 1.5s so it never stalls on black
     if (idx === currentIndexRef.current && photosCount > 1) {
       if (autoSkipTimerRef.current) clearTimeout(autoSkipTimerRef.current);
@@ -253,6 +273,20 @@ export const Slideshow: React.FC<SlideshowProps> = ({
           </div>
         );
       })}
+
+      {/* 7-Day Session Expiration Indicator */}
+      {isSessionExpired && (
+        <div className="absolute top-3 left-3 z-30 pointer-events-auto">
+          <button
+            onClick={onOpenAlbumPicker}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg backdrop-blur-md transition animate-pulse"
+            title="Google limits picker sessions to 7 days. Tap here to renew your family photo selection."
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            <span>Photos Expired (7d limit) • Tap to Renew</span>
+          </button>
+        </div>
+      )}
 
       {/* Subtle top vignette for readability */}
       <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/70 via-black/30 to-transparent pointer-events-none" />
