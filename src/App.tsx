@@ -313,11 +313,15 @@ export const App: React.FC = () => {
     if (!settings.showStockTicker) return;
 
     const fetchQuote = () => {
-      fetchSingleStockQuote(settings.monitoredStock).then((res) => setMonitoredStockItem(res));
+      fetchSingleStockQuote(settings.monitoredStock).then((res) => {
+        if (res && res.price > 0) {
+          setMonitoredStockItem(res);
+        }
+      });
     };
 
     fetchQuote();
-    const interval = setInterval(fetchQuote, 25 * 1000); // refresh every 25s
+    const interval = setInterval(fetchQuote, 60 * 1000); // refresh every 60s
     return () => clearInterval(interval);
   }, [settings.showStockTicker, settings.monitoredStock]);
 

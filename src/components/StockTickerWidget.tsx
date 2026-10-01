@@ -7,7 +7,7 @@ interface StockTickerWidgetProps {
 }
 
 export const StockTickerWidget: React.FC<StockTickerWidgetProps> = ({ stock }) => {
-  if (!stock) return null;
+  if (!stock || stock.price <= 0) return null;
 
   const isPositive = stock.change >= 0;
 

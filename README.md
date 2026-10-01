@@ -102,6 +102,9 @@ FamCal uses client-side Google Identity Services (GIS) with direct Google API re
 - **On Wall-Mounted Tablet**:
   - Install the PWA.
   - Tap the **Sun icon** in the bottom control bar to activate **Screen Wake Lock**, ensuring the wall tablet stays on 24/7.
+- **On Raspberry Pi 3B+ (Dedicated Kiosk OS)**:
+  - Turn your Raspberry Pi 3B+ into a dedicated wall display appliance using the [pi-kiosk](file:///storage/emulated/10/Documents/FamCal/pi-kiosk/README.md) suite.
+  - Features: Auto-launches full screen on boot and after power loss, `Ctrl+Alt+U` or `F8` hotkey for live URL entry, 9:16 portrait rotation, and corruption-free power outage recovery.
 
 ---
 

@@ -23,6 +23,36 @@ export default defineConfig(({ command }) => {
     },
     plugins: [
       react(),
+      {
+        name: 'stock-proxy-middleware',
+        configureServer(server) {
+          server.middlewares.use('/api/stock', async (req, res) => {
+            try {
+              const url = new URL(req.url || '', 'http://localhost');
+              const symbol = (url.searchParams.get('symbol') || 'GOOGL').toUpperCase();
+              const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+              const fetchRes = await fetch(targetUrl, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                  'Accept': 'application/json',
+                },
+              });
+              if (!fetchRes.ok) {
+                res.statusCode = fetchRes.status;
+                res.end(JSON.stringify({ error: `Yahoo returned HTTP ${fetchRes.status}` }));
+                return;
+              }
+              const data = await fetchRes.text();
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.end(data);
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
+        },
+      },
       legacy({
         targets: ['chrome >= 49', 'edge >= 15', 'firefox >= 50', 'safari >= 10', 'defaults'],
         additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
