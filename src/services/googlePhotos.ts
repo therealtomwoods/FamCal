@@ -213,18 +213,18 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 
 /**
  * Download authenticated image bytes from Google Photos baseUrl.
- * Tries authenticated fetch and direct fetch with no-referrer.
+ * Google CDN accepts unauthenticated GET requests without custom headers.
+ * Note: Sending Authorization headers causes browser OPTIONS preflight which Google CDN rejects.
  */
-export async function downloadPhotoBlob(baseUrl: string, token: string): Promise<Blob | null> {
+export async function downloadPhotoBlob(baseUrl: string, _token?: string): Promise<Blob | null> {
   const cleanBase = baseUrl.split('=')[0];
   const targetUrl = `${cleanBase}=w1200-h800`;
 
-  // 1. Direct fetch with Authorization header and no-referrer
+  // 1. Direct unauthenticated fetch (simple GET, no CORS preflight)
   try {
     const res = await fetchWithTimeout(targetUrl, {
-      headers: { Authorization: `Bearer ${token}` },
       referrerPolicy: 'no-referrer',
-    }, 4000);
+    }, 6000);
     if (res.ok) {
       const blob = await res.blob();
       if (blob.size > 0 && blob.type.startsWith('image/')) {
@@ -232,16 +232,15 @@ export async function downloadPhotoBlob(baseUrl: string, token: string): Promise
       }
     }
   } catch (err) {
-    // Expected when browser blocks CORS preflight on Authorization header
+    // ignore
   }
 
-  // 2. Direct fetch with download parameter (=d) and Authorization
+  // 2. Direct fetch with download parameter (=d)
   try {
     const origUrl = `${cleanBase}=d`;
     const res = await fetchWithTimeout(origUrl, {
-      headers: { Authorization: `Bearer ${token}` },
       referrerPolicy: 'no-referrer',
-    }, 4000);
+    }, 6000);
     if (res.ok) {
       const blob = await res.blob();
       if (blob.size > 0 && blob.type.startsWith('image/')) {
@@ -249,21 +248,6 @@ export async function downloadPhotoBlob(baseUrl: string, token: string): Promise
       }
     }
   } catch (origErr) {
-    // ignore
-  }
-
-  // 3. Direct unauthenticated fetch (simple GET, no CORS preflight, works with active session and no-referrer)
-  try {
-    const res = await fetchWithTimeout(targetUrl, {
-      referrerPolicy: 'no-referrer',
-    }, 4000);
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 0 && blob.type.startsWith('image/')) {
-        return blob;
-      }
-    }
-  } catch (noAuthErr) {
     // ignore
   }
 
@@ -468,6 +452,9 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
         }
         const errText = await res.text();
         console.warn(`Picker mediaItems fetch error (status ${res.status}):`, errText);
+        if (res.status === 401) {
+          throw new Error('UNAUTHORIZED_TOKEN_EXPIRED');
+        }
         if (res.status === 404 || res.status === 400 || res.status === 410) {
           throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
         }
@@ -483,7 +470,10 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
       if (!pageToken) {
         break; // All pages traversed
       }
-    } catch (fetchErr) {
+    } catch (fetchErr: any) {
+      if (fetchErr?.message?.includes('UNAUTHORIZED') || fetchErr?.message?.includes('PICKER_SESSION_EXPIRED')) {
+        throw fetchErr;
+      }
       console.warn('Network error during picker mediaItems pagination:', fetchErr);
       break;
     }
@@ -550,13 +540,15 @@ async function processAndStreamPickedPhotos(
 }
 
 /**
- * Proactively or reactively refreshes Google Photos baseUrls before or after the 60-minute expiry
+ * Proactively or reactively refreshes Google Photos baseUrls before or after the 60-minute expiry.
+ * Automatically recovers from expired OAuth tokens if clientId is available.
  */
 export async function refreshPhotoUrls(
   token: string,
-  currentAlbumId?: string
-): Promise<{ success: boolean; photos: PhotoItem[]; sessionExpired?: boolean }> {
-  if (!token) return { success: false, photos: [] };
+  currentAlbumId?: string,
+  clientId?: string
+): Promise<{ success: boolean; photos: PhotoItem[]; sessionExpired?: boolean; tokenExpired?: boolean }> {
+  if (!token && !clientId) return { success: false, photos: [] };
 
   const pickerSessionId = localStorage.getItem('famcal_picker_session_id');
   const isPickedAlbum =
@@ -568,7 +560,27 @@ export async function refreshPhotoUrls(
   if (pickerSessionId && isPickedAlbum) {
     try {
       const cleanId = pickerSessionId.replace(/^sessions\//, '');
-      const freshPhotos = await fetchPickerSelectedMediaItems(token, cleanId);
+      let activeToken = token;
+      let freshPhotos: PhotoItem[] = [];
+
+      try {
+        freshPhotos = await fetchPickerSelectedMediaItems(activeToken, cleanId);
+      } catch (firstErr: any) {
+        // If OAuth token expired (401), attempt silent renewal once and retry
+        if (firstErr?.message?.includes('UNAUTHORIZED') && clientId) {
+          console.log('Picker returned 401 Unauthorized. Attempting silent token renewal...');
+          const { requestSilentTokenRefresh } = await import('./googleAuth');
+          const renewed = await requestSilentTokenRefresh(clientId);
+          if (renewed) {
+            activeToken = renewed;
+            freshPhotos = await fetchPickerSelectedMediaItems(activeToken, cleanId);
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
 
       if (freshPhotos && freshPhotos.length > 0) {
         const existing = await loadStoredPhotos();
@@ -601,6 +613,9 @@ export async function refreshPhotoUrls(
         localStorage.setItem('famcal_picker_session_expired', 'true');
         return { success: false, photos: [], sessionExpired: true };
       }
+      if (err?.message?.includes('UNAUTHORIZED')) {
+        return { success: false, photos: [], tokenExpired: true };
+      }
     }
   }
 
@@ -613,6 +628,8 @@ export async function refreshPhotoUrls(
     try {
       const freshAlbumPhotos = await fetchAlbumPhotos(token, currentAlbumId);
       if (freshAlbumPhotos.length > 0) {
+        saveStoredPickedPhotos(freshAlbumPhotos);
+        savePhotosToIndexedDB(freshAlbumPhotos);
         localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
         return { success: true, photos: freshAlbumPhotos };
       }

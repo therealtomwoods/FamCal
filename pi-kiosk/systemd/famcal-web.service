@@ -1,0 +1,18 @@
+[Unit]
+Description=FamCal Local Web Application Server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/famcal
+ExecStart=/usr/bin/python3 /usr/local/bin/famcal-web-serve
+Restart=always
+RestartSec=3s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

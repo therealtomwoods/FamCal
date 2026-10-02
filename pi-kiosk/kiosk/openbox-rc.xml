@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <!-- Minimal Openbox configuration for FamCal Kiosk on Raspberry Pi 3B+ -->
+  <theme>
+    <name>Clearlooks</name>
+    <titleLayout></titleLayout>
+    <keepBorder>no</keepBorder>
+    <animateIconify>no</animateIconify>
+  </theme>
+
+  <resistance>
+    <strength>10</strength>
+    <screen_edge_strength>20</screen_edge_strength>
+  </resistance>
+
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+    <underMouse>no</underMouse>
+  </focus>
+
+  <keyboard>
+    <chainQuitKey>Escape</chainQuitKey>
+
+    <!-- Hotkey: Ctrl+Alt+U to launch URL Configuration Dialog -->
+    <keybind key="C-A-u">
+      <action name="Execute">
+        <command>/usr/local/bin/famcal-url-config</command>
+      </action>
+    </keybind>
+
+    <!-- Alternative single-key Hotkey: F8 for quick wireless remotes / keyboards -->
+    <keybind key="F8">
+      <action name="Execute">
+        <command>/usr/local/bin/famcal-url-config</command>
+      </action>
+    </keybind>
+
+    <!-- Screen Rotation Toggle: Ctrl+Alt+R -->
+    <keybind key="C-A-r">
+      <action name="Execute">
+        <command>/usr/local/bin/famcal-rotate</command>
+      </action>
+    </keybind>
+
+    <!-- Page Refresh: F5 -->
+    <keybind key="F5">
+      <action name="Execute">
+        <command>xdotool key F5</command>
+      </action>
+    </keybind>
+
+    <!-- Safe Reboot: Ctrl+Alt+Delete or Ctrl+Alt+B -->
+    <keybind key="C-A-Delete">
+      <action name="Execute">
+        <command>sudo reboot</command>
+      </action>
+    </keybind>
+
+    <keybind key="C-A-b">
+      <action name="Execute">
+        <command>sudo reboot</command>
+      </action>
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <dragThreshold>8</dragThreshold>
+    <doubleClickTime>500</doubleClickTime>
+  </mouse>
+
+  <applications>
+    <!-- Chromium Fullscreen rules -->
+    <application class="Chromium-browser">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+    <application class="Chromium">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+
+    <!-- FamCal URL Config Dialog rules: keep floating & centered on top -->
+    <application name="FamCal Kiosk — URL Setup">
+      <decor>yes</decor>
+      <position force="yes">
+        <x>center</x>
+        <y>center</y>
+      </position>
+      <layer>above</layer>
+      <focus>yes</focus>
+    </application>
+  </applications>
+</openbox_config>

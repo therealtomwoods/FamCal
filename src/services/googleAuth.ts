@@ -27,7 +27,7 @@ export interface TokenResponse {
 }
 
 export interface TokenClient {
-  requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+  requestAccessToken: (overrideConfig?: { prompt?: string; hint?: string }) => void;
 }
 
 export interface UserProfile {
@@ -188,8 +188,19 @@ export function requestSilentTokenRefresh(
             }
           });
 
-          // Request access token with prompt: '' for silent background renewal without popup
-          tokenClientInstance.requestAccessToken({ prompt: '' });
+          // Request access token silently with hint if user email is known
+          const profile = getStoredUserProfile();
+          const userEmail =
+            profile?.email && profile.email !== 'Connected' && !profile.email.includes('...')
+              ? profile.email
+              : undefined;
+
+          const requestConfig: { prompt: string; hint?: string } = { prompt: '' };
+          if (userEmail) {
+            requestConfig.hint = userEmail;
+          }
+
+          tokenClientInstance.requestAccessToken(requestConfig);
 
           setTimeout(() => {
             if (isRefreshingSilent) {
@@ -214,12 +225,13 @@ export function requestSilentTokenRefresh(
 
 export async function ensureValidAccessToken(clientId: string): Promise<string | null> {
   const currentToken = getStoredAccessToken();
-  if (currentToken && !isTokenExpired(300000)) {
-    // Current token is valid for at least 5 more minutes
+  if (currentToken && !isTokenExpired(600000)) {
+    // Current token is valid for at least 10 more minutes
     return currentToken;
   }
 
   if (clientId && clientId.trim() !== '') {
+    console.log('Access token expiring soon or expired, requesting silent renewal...');
     const freshToken = await requestSilentTokenRefresh(clientId);
     if (freshToken) return freshToken;
   }

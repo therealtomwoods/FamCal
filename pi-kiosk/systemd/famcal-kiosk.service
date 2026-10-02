@@ -1,0 +1,32 @@
+[Unit]
+Description=FamCal Full-Screen Kiosk Display Service
+After=network-online.target time-sync.target systemd-user-sessions.service
+Wants=network-online.target
+Conflicts=getty@tty7.service
+
+[Service]
+Type=simple
+User=__KIOSK_USER__
+Group=__KIOSK_GROUP__
+PAMName=login
+WorkingDirectory=__KIOSK_HOME__
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=__KIOSK_HOME__/.Xauthority
+Environment=HOME=__KIOSK_HOME__
+
+# Setup volatile cache directory in RAM to protect SD card
+ExecStartPre=-/bin/sh -c 'mkdir -p /tmp/chromium-cache && chown -R __KIOSK_USER__:__KIOSK_GROUP__ /tmp/chromium-cache'
+
+# Start minimal X11 server and run kiosk launcher directly
+ExecStart=/usr/bin/xinit /etc/famcal-kiosk/kiosk-launcher.sh -- :0 vt7 -nocursor
+
+# Ensure kiosk immediately restarts if closed or crashed
+Restart=always
+RestartSec=3s
+
+# Standard logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target

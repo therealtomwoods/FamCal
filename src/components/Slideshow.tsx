@@ -160,12 +160,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     transitionTo((currentIndex + 1) % photosCount);
   };
 
-  // Gracefully handle image load failure: mark as failed, switch to fallback, and auto-skip if active
+  // Gracefully handle image load failure: mark as failed, switch to fallback, and request background refresh
   const handleImageError = (photoKey: string, idx: number) => {
-    setFailedPhotoIds((prev) => {
-      if (prev[photoKey]) return prev;
-      return { ...prev, [photoKey]: true };
-    });
+    if (failedPhotoIds[photoKey]) return; // Already handled
+
+    setFailedPhotoIds((prev) => ({ ...prev, [photoKey]: true }));
 
     const failedPhoto = photos?.[idx];
     const isGooglePhoto =
@@ -178,13 +177,13 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       onPhotosNeedRefresh();
     }
 
-    // If the active visible photo failed, auto-advance to the next photo after 1.5s so it never stalls on black
+    // Smoothly advance after 4s (not 1.5s strobe) if the active visible photo failed, so fallback can show cleanly
     if (idx === currentIndexRef.current && photosCount > 1) {
       if (autoSkipTimerRef.current) clearTimeout(autoSkipTimerRef.current);
       autoSkipTimerRef.current = setTimeout(() => {
         const next = (currentIndexRef.current + 1) % photosCount;
         transitionTo(next);
-      }, 1500);
+      }, 4000);
     }
   };
 
@@ -225,7 +224,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
         const isActive = isCurrent;
         const photoKey = photo.id || String(idx);
-        const isFailed = failedPhotoIds[photoKey];
+        const isFailed = Boolean(failedPhotoIds[photoKey]);
         const displaySrc = isFailed
           ? RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length]
           : photo.url;
@@ -243,7 +242,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center"
               loading={idx === 0 ? 'eager' : 'lazy'}
-              onError={() => handleImageError(photoKey, idx)}
+              onError={() => {
+                if (!isFailed) {
+                  handleImageError(photoKey, idx);
+                }
+              }}
             />
 
             {/* Offline-resilient fallback background if both primary and secondary network fail */}
@@ -253,11 +256,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
                   <Heart className="w-8 h-8 opacity-80" />
                 </div>
                 <p className="text-sm font-semibold text-white/90">Family Memories</p>
-                <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
-                  {photo.caption && !isFileName(photo.caption, photo.filename)
-                    ? photo.caption
-                    : 'Connecting to Google Photos...'}
-                </p>
+                {photo.caption && !isFileName(photo.caption, photo.filename) && (
+                  <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
+                    {photo.caption}
+                  </p>
+                )}
               </div>
             )}
 

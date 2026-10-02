@@ -158,18 +158,40 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [settings.googleClientId, settings.isDemoMode]);
 
+  // Proactive background photo baseUrl refresh (every 35 minutes, before Google's 60m expiry)
+  useEffect(() => {
+    if (settings.isDemoMode) return;
+
+    const refreshBaseUrlsProactively = async () => {
+      const activeTok = (await ensureValidAccessToken(settings.googleClientId)) || userToken;
+      if (!activeTok) return;
+
+      console.log('Running proactive 35-minute Google Photos baseUrl refresh...');
+      const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId, settings.googleClientId);
+      if (res.success && res.photos.length > 0) {
+        setPhotos(res.photos);
+        setIsPhotosSessionExpired(false);
+      } else if (res.sessionExpired) {
+        setIsPhotosSessionExpired(true);
+      }
+    };
+
+    const interval = setInterval(refreshBaseUrlsProactively, 35 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [settings.googleClientId, userToken, settings.selectedAlbumId, settings.isDemoMode]);
+
   // Reactive photo baseUrls refresh handler (invoked when Slideshow encounters a photo error)
   const lastPhotoRefreshTriggerRef = useRef<number>(0);
   const handlePhotosNeedRefresh = useCallback(async () => {
     const now = Date.now();
-    if (now - lastPhotoRefreshTriggerRef.current < 25000) return; // 25s debounce
+    if (now - lastPhotoRefreshTriggerRef.current < 20000) return; // 20s debounce
     lastPhotoRefreshTriggerRef.current = now;
 
-    console.log('Slideshow reported photo load error. Proactively fetching fresh baseUrls...');
+    console.log('Slideshow reported photo load error. Fetching fresh baseUrls...');
     const activeTok = (await ensureValidAccessToken(settings.googleClientId)) || userToken;
     if (!activeTok) return;
 
-    const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId);
+    const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId, settings.googleClientId);
     if (res.success && res.photos.length > 0) {
       setPhotos(res.photos);
       setIsPhotosSessionExpired(false);
@@ -422,10 +444,10 @@ export const App: React.FC = () => {
         settings.selectedAlbumId === 'PICKED_GOOGLE_PHOTOS' ||
         settings.selectedAlbumId === 'ALL_LIBRARY_PHOTOS';
 
-      // If photo baseUrls are older than 40 minutes (Google expires them in 60m), refresh them from Google
-      if (photoAgeMs > 40 * 60 * 1000) {
-        console.log('Photo baseUrls older than 40m, refreshing from Google...');
-        const refreshResult = await refreshPhotoUrls(activeToken, settings.selectedAlbumId);
+      // If photo baseUrls are older than 35 minutes (Google expires them in 60m), refresh them from Google
+      if (photoAgeMs > 35 * 60 * 1000) {
+        console.log('Photo baseUrls older than 35m, refreshing from Google...');
+        const refreshResult = await refreshPhotoUrls(activeToken, settings.selectedAlbumId, settings.googleClientId);
         if (refreshResult.success && refreshResult.photos.length > 0) {
           setPhotos(refreshResult.photos);
           setIsPhotosSessionExpired(false);
