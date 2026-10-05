@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { PhotoItem } from '../types';
-import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Image, FolderOpen, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
 
 interface SlideshowProps {
   photos: PhotoItem[];
@@ -28,6 +28,53 @@ const isFileName = (text?: string, filename?: string): boolean => {
     return true;
   }
   return false;
+};
+
+export const formatPhotoDate = (photo?: PhotoItem | null): string | undefined => {
+  if (!photo) return undefined;
+
+  // 1. If explicit dateTaken exists
+  if (photo.dateTaken && photo.dateTaken.trim()) {
+    const raw = photo.dateTaken.trim();
+    // If it's already a clean string like "July 14, 2026" or "Jul 14, 2026"
+    if (/^[A-Za-z]+\s+\d{1,2},\s+\d{4}$/.test(raw) || /^\d{1,2}\s+[A-Za-z]+,?\s+\d{4}$/.test(raw)) {
+      return raw;
+    }
+    try {
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        });
+      }
+    } catch {
+      return raw;
+    }
+  }
+
+  // 2. Try camera filename timestamp (e.g. IMG_20230814_120422.jpg, PXL_20240102_...)
+  if (photo.filename) {
+    const m = photo.filename.match(/(?:IMG_|PXL_|VID_|\b)(\d{4})[-_]?(\d{2})[-_]?(\d{2})/i);
+    if (m) {
+      const year = parseInt(m[1], 10);
+      const month = parseInt(m[2], 10) - 1;
+      const day = parseInt(m[3], 10);
+      if (year >= 1990 && year <= 2035 && month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+        const d = new Date(year, month, day);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+        }
+      }
+    }
+  }
+
+  return undefined;
 };
 
 // Guaranteed high-res reliable family fallback photos
@@ -304,18 +351,28 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         </div>
       )}
 
-      {/* Bottom Photo Metadata (Caption & Date) - Suppress any raw file names */}
-      {currentPhoto && ((currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename)) || currentPhoto.dateTaken) && (
-        <div className="absolute bottom-3 left-4 right-4 z-10 pointer-events-none">
-          {currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename) && (
-            <p className="text-xs sm:text-sm font-medium text-white/95 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] line-clamp-1">
-              {currentPhoto.caption}
-            </p>
-          )}
-          {currentPhoto.dateTaken && (
-            <p className="text-[11px] font-normal text-white/70 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)] mt-0.5">
-              {currentPhoto.dateTaken}
-            </p>
+      {/* Bottom Photo Metadata: Caption on Left, Small Date Tag in Bottom-Right Corner */}
+      {currentPhoto && (
+        <div className="absolute bottom-3 left-4 right-4 z-20 pointer-events-none flex items-end justify-between gap-3">
+          {/* Caption on Left */}
+          <div className="flex-1 min-w-0">
+            {currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename) && (
+              <p className="text-xs sm:text-sm font-medium text-white/95 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] line-clamp-1">
+                {currentPhoto.caption}
+              </p>
+            )}
+          </div>
+
+          {/* Small Tag in Bottom-Right Corner with the Date of the Photo */}
+          {formatPhotoDate(currentPhoto) && (
+            <div className="flex-shrink-0">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/65 backdrop-blur-md border border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.8)]">
+                <Calendar className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                <span className="text-[11px] sm:text-xs font-semibold tracking-wide text-slate-100 drop-shadow">
+                  {formatPhotoDate(currentPhoto)}
+                </span>
+              </div>
+            </div>
           )}
         </div>
       )}

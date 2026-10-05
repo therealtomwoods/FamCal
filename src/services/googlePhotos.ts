@@ -419,12 +419,35 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
       const filename = item.mediaFile?.filename || (item as any).filename || 'Family Photo';
       const width = item.mediaFile?.mediaFileMetadata?.width || (item as any).width;
       const height = item.mediaFile?.mediaFileMetadata?.height || (item as any).height;
+
+      const rawDate =
+        item.createTime ||
+        (item as any).mediaMetadata?.creationTime ||
+        (item as any).mediaFile?.createTime;
+
+      let dateTaken: string | undefined;
+      if (rawDate) {
+        try {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            dateTaken = d.toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+          }
+        } catch {
+          dateTaken = rawDate;
+        }
+      }
+
       return {
         id: item.id,
         url: `${baseUrl}=w1200-h800`,
         baseUrl: baseUrl,
         filename: filename,
         caption: undefined,
+        dateTaken: dateTaken,
         width: typeof width === 'number' ? width : undefined,
         height: typeof height === 'number' ? height : undefined,
       };
