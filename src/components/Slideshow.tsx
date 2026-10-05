@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { PhotoItem } from '../types';
-import { Image, FolderOpen, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
+import { Image, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface SlideshowProps {
   photos: PhotoItem[];
@@ -160,7 +160,9 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     transitionTo((currentIndex + 1) % photosCount);
   };
 
-  // Gracefully handle image load failure: mark as failed, switch to fallback, and request background refresh
+  const lastWorkingSrcRef = useRef<string | null>(null);
+
+  // Gracefully handle image load failure: mark as failed and request background refresh
   const handleImageError = (photoKey: string, idx: number) => {
     if (failedPhotoIds[photoKey]) return; // Already handled
 
@@ -172,18 +174,9 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       failedPhoto?.baseUrl?.includes('googleusercontent.com') ||
       failedPhoto?.url?.includes('photospicker.googleapis.com');
 
-    // If an active Google Photos URL failed (likely 403 expired baseUrl), alert parent to fetch fresh baseUrls
+    // If an active Google Photos URL failed (likely expired baseUrl), alert parent to fetch fresh baseUrls
     if (isGooglePhoto && onPhotosNeedRefresh) {
       onPhotosNeedRefresh();
-    }
-
-    // Smoothly advance after 4s (not 1.5s strobe) if the active visible photo failed, so fallback can show cleanly
-    if (idx === currentIndexRef.current && photosCount > 1) {
-      if (autoSkipTimerRef.current) clearTimeout(autoSkipTimerRef.current);
-      autoSkipTimerRef.current = setTimeout(() => {
-        const next = (currentIndexRef.current + 1) % photosCount;
-        transitionTo(next);
-      }, 4000);
     }
   };
 
@@ -226,7 +219,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         const photoKey = photo.id || String(idx);
         const isFailed = Boolean(failedPhotoIds[photoKey]);
         const displaySrc = isFailed
-          ? RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length]
+          ? (lastWorkingSrcRef.current || RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length])
           : photo.url;
 
         return (
@@ -242,27 +235,17 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center"
               loading={idx === 0 ? 'eager' : 'lazy'}
+              onLoad={() => {
+                if (!isFailed) {
+                  lastWorkingSrcRef.current = photo.url;
+                }
+              }}
               onError={() => {
                 if (!isFailed) {
                   handleImageError(photoKey, idx);
                 }
               }}
             />
-
-            {/* Offline-resilient fallback background if both primary and secondary network fail */}
-            {isFailed && (
-              <div className="absolute inset-0 -z-10 bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-950 flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-2 text-indigo-400">
-                  <Heart className="w-8 h-8 opacity-80" />
-                </div>
-                <p className="text-sm font-semibold text-white/90">Family Memories</p>
-                {photo.caption && !isFileName(photo.caption, photo.filename) && (
-                  <p className="text-xs text-slate-400 mt-1 max-w-[240px]">
-                    {photo.caption}
-                  </p>
-                )}
-              </div>
-            )}
 
             {/* Temporary non-intrusive loading badge (auto-dismisses after 4s, never lingers) */}
             {showLoadingBadge && isActive && !isFailed && (

@@ -25,7 +25,46 @@ class FamCalRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.end_headers()
+
     def do_GET(self):
+        # Photo proxy with CORS
+        if self.path.startswith("/api/photo"):
+            try:
+                import urllib.request
+                from urllib.parse import parse_qs, urlparse
+
+                query = parse_qs(urlparse(self.path).query)
+                target_url = query.get("url", [None])[0]
+                if not target_url or not target_url.startswith("https://"):
+                    self.send_error(400, "Invalid target URL")
+                    return
+
+                req = urllib.request.Request(target_url)
+                auth = self.headers.get("Authorization")
+                if auth:
+                    req.add_header("Authorization", auth)
+                req.add_header("User-Agent", "FamCal/1.0")
+
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    content = response.read()
+                    content_type = response.headers.get("Content-Type", "image/jpeg")
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Cache-Control", "public, max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(content)
+            except Exception as e:
+                self.send_error(500, str(e))
+            return
+
         # SPA routing: if path doesn't exist as a file, serve index.html
         path = self.translate_path(self.path)
         if not os.path.exists(path) and not os.path.splitext(self.path)[1]:

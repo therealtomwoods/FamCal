@@ -213,14 +213,31 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 
 /**
  * Download authenticated image bytes from Google Photos baseUrl.
- * Google CDN accepts unauthenticated GET requests without custom headers.
- * Note: Sending Authorization headers causes browser OPTIONS preflight which Google CDN rejects.
+ * Tries local CORS-enabled /api/photo proxy first, then direct fallbacks.
  */
-export async function downloadPhotoBlob(baseUrl: string, _token?: string): Promise<Blob | null> {
+export async function downloadPhotoBlob(baseUrl: string, token?: string): Promise<Blob | null> {
   const cleanBase = baseUrl.split('=')[0];
   const targetUrl = `${cleanBase}=w1200-h800`;
 
-  // 1. Direct unauthenticated fetch (simple GET, no CORS preflight)
+  // 1. Try local proxy first (works in both Vite dev server and Pi-Kiosk server)
+  try {
+    const proxyUrl = `/api/photo?url=${encodeURIComponent(targetUrl)}`;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetchWithTimeout(proxyUrl, { headers }, 8000);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob.size > 0 && blob.type.startsWith('image/')) {
+        return blob;
+      }
+    }
+  } catch {
+    // fallback to direct fetch
+  }
+
+  // 2. Direct unauthenticated fetch (simple GET, no CORS preflight)
   try {
     const res = await fetchWithTimeout(targetUrl, {
       referrerPolicy: 'no-referrer',
@@ -235,7 +252,7 @@ export async function downloadPhotoBlob(baseUrl: string, _token?: string): Promi
     // ignore
   }
 
-  // 2. Direct fetch with download parameter (=d)
+  // 3. Direct fetch with download parameter (=d)
   try {
     const origUrl = `${cleanBase}=d`;
     const res = await fetchWithTimeout(origUrl, {
@@ -588,8 +605,11 @@ export async function refreshPhotoUrls(
 
         const merged = freshPhotos.map((fresh) => {
           const old = existingMap.get(fresh.id);
+          const hasHydratedUrl = old?.url && (old.url.startsWith('data:') || old.url.startsWith('blob:'));
           return {
             ...fresh,
+            // Preserve persistent hydrated image data if already downloaded and cached
+            url: hasHydratedUrl ? old.url : fresh.url,
             caption: old?.caption || fresh.caption,
             dateTaken: old?.dateTaken || fresh.dateTaken,
           };

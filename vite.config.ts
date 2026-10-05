@@ -24,8 +24,9 @@ export default defineConfig(({ command }) => {
     plugins: [
       react(),
       {
-        name: 'stock-proxy-middleware',
+        name: 'photo-and-stock-proxy-middleware',
         configureServer(server) {
+          // Stock Quote Proxy
           server.middlewares.use('/api/stock', async (req, res) => {
             try {
               const url = new URL(req.url || '', 'http://localhost');
@@ -46,6 +47,55 @@ export default defineConfig(({ command }) => {
               res.setHeader('Content-Type', 'application/json');
               res.setHeader('Access-Control-Allow-Origin', '*');
               res.end(data);
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
+
+          // Google Photos Byte Proxy with CORS
+          server.middlewares.use('/api/photo', async (req, res) => {
+            if (req.method === 'OPTIONS') {
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+              res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+              res.statusCode = 204;
+              res.end();
+              return;
+            }
+
+            try {
+              const url = new URL(req.url || '', 'http://localhost');
+              const targetUrl = url.searchParams.get('url');
+              if (!targetUrl || !targetUrl.startsWith('https://')) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({ error: 'Missing or invalid url parameter' }));
+                return;
+              }
+
+              const authHeader = req.headers['authorization'];
+              const fetchHeaders: Record<string, string> = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+              };
+              if (authHeader) {
+                fetchHeaders['Authorization'] = authHeader;
+              }
+
+              const fetchRes = await fetch(targetUrl, { headers: fetchHeaders });
+              if (!fetchRes.ok) {
+                res.statusCode = fetchRes.status;
+                res.end(JSON.stringify({ error: `Google CDN returned HTTP ${fetchRes.status}` }));
+                return;
+              }
+
+              const arrayBuf = await fetchRes.arrayBuffer();
+              const buffer = Buffer.from(arrayBuf);
+              const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
+
+              res.setHeader('Content-Type', contentType);
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              res.setHeader('Cache-Control', 'public, max-age=86400');
+              res.end(buffer);
             } catch (err: any) {
               res.statusCode = 500;
               res.end(JSON.stringify({ error: err.message }));

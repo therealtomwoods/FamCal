@@ -158,25 +158,32 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [settings.googleClientId, settings.isDemoMode]);
 
-  // Proactive background photo baseUrl refresh (every 35 minutes, before Google's 60m expiry)
+  // Proactive background photo baseUrl check (every minute heartbeat, refreshes when older than 25 minutes)
   useEffect(() => {
     if (settings.isDemoMode) return;
 
-    const refreshBaseUrlsProactively = async () => {
-      const activeTok = (await ensureValidAccessToken(settings.googleClientId)) || userToken;
-      if (!activeTok) return;
+    const checkAndRefreshBaseUrls = async () => {
+      const lastFetch = parseInt(localStorage.getItem('famcal_photos_fetched_at') || '0', 10);
+      const ageMs = Date.now() - lastFetch;
 
-      console.log('Running proactive 35-minute Google Photos baseUrl refresh...');
-      const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId, settings.googleClientId);
-      if (res.success && res.photos.length > 0) {
-        setPhotos(res.photos);
-        setIsPhotosSessionExpired(false);
-      } else if (res.sessionExpired) {
-        setIsPhotosSessionExpired(true);
+      // When URLs are older than 25 minutes (Google CDN expires them in 60m), fetch fresh baseUrls
+      if (ageMs > 25 * 60 * 1000) {
+        const activeTok = (await ensureValidAccessToken(settings.googleClientId)) || userToken;
+        if (!activeTok) return;
+
+        console.log(`Photos are ${Math.round(ageMs / 60000)}m old. Proactively refreshing Google baseUrls...`);
+        const res = await refreshPhotoUrls(activeTok, settings.selectedAlbumId, settings.googleClientId);
+        if (res.success && res.photos.length > 0) {
+          setPhotos(res.photos);
+          setIsPhotosSessionExpired(false);
+        } else if (res.sessionExpired) {
+          setIsPhotosSessionExpired(true);
+        }
       }
     };
 
-    const interval = setInterval(refreshBaseUrlsProactively, 35 * 60 * 1000);
+    checkAndRefreshBaseUrls();
+    const interval = setInterval(checkAndRefreshBaseUrls, 60 * 1000);
     return () => clearInterval(interval);
   }, [settings.googleClientId, userToken, settings.selectedAlbumId, settings.isDemoMode]);
 
