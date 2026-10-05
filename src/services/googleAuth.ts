@@ -110,6 +110,8 @@ export function clearStoredSession(): void {
 
 let isRefreshingSilent = false;
 let refreshResolvers: Array<(token: string | null) => void> = [];
+let lastFailedSilentRefresh = 0;
+const SILENT_REFRESH_COOLDOWN_MS = 15 * 60 * 1000; // 15-minute cooldown to prevent focus stealing loops
 
 export function requestSilentTokenRefresh(
   clientId: string,
@@ -117,6 +119,17 @@ export function requestSilentTokenRefresh(
 ): Promise<string | null> {
   return new Promise((resolve) => {
     if (!clientId || clientId.trim() === '') {
+      return resolve(null);
+    }
+
+    // Only attempt silent refresh if there is already a stored token to renew
+    const currentToken = getStoredAccessToken();
+    if (!currentToken) {
+      return resolve(null);
+    }
+
+    // Enforce cooldown if recent silent refresh failed to avoid recurring focus/auth disruption
+    if (Date.now() - lastFailedSilentRefresh < SILENT_REFRESH_COOLDOWN_MS) {
       return resolve(null);
     }
 
@@ -128,6 +141,11 @@ export function requestSilentTokenRefresh(
 
     const finishAll = (token: string | null) => {
       isRefreshingSilent = false;
+      if (!token) {
+        lastFailedSilentRefresh = Date.now();
+      } else {
+        lastFailedSilentRefresh = 0;
+      }
       const resolvers = [...refreshResolvers];
       refreshResolvers = [];
       resolvers.forEach((res) => res(token));
@@ -225,8 +243,17 @@ export function requestSilentTokenRefresh(
 
 export async function ensureValidAccessToken(clientId: string): Promise<string | null> {
   const currentToken = getStoredAccessToken();
-  if (currentToken && !isTokenExpired(600000)) {
+  if (!currentToken) {
+    return null;
+  }
+
+  if (!isTokenExpired(600000)) {
     // Current token is valid for at least 10 more minutes
+    return currentToken;
+  }
+
+  // Avoid repeated silent refresh attempts if recent failure is still within cooldown
+  if (Date.now() - lastFailedSilentRefresh < SILENT_REFRESH_COOLDOWN_MS) {
     return currentToken;
   }
 

@@ -1,5 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Maximize, Minimize, Sun, Moon, RefreshCw, Settings, ShieldCheck, Sparkles, Layers, Calendar, Columns4, Smartphone } from 'lucide-react';
+import {
+  isBrowserFullscreen,
+  requestBrowserFullscreen,
+  exitBrowserFullscreen,
+  acquireScreenWakeLock,
+  releaseScreenWakeLock,
+  isWakeLockActive,
+  getKioskFullscreenPreferred,
+  setKioskFullscreenPreferred,
+  getKioskWakeLockPreferred,
+  setKioskWakeLockPreferred,
+} from '../services/kioskService';
 
 interface KioskControlsProps {
   isDemoMode: boolean;
@@ -22,25 +34,64 @@ export const KioskControls: React.FC<KioskControlsProps> = ({
   isHorizontal,
   onToggleScreenMode,
 }) => {
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [wakeLockActive, setWakeLockActive] = useState(false);
-  const [wakeLockSentinel, setWakeLockSentinel] = useState<any>(null);
+  const [isFullscreen, setIsFullscreen] = useState(isBrowserFullscreen);
+  const [wakeLockActive, setWakeLockActive] = useState(isWakeLockActive);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     const handleFsChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const fs = isBrowserFullscreen();
+      setIsFullscreen(fs);
+      // When in fullscreen, keep wake lock active so display stays on
+      if (fs && getKioskWakeLockPreferred()) {
+        acquireScreenWakeLock().then(() => setWakeLockActive(isWakeLockActive()));
+      }
     };
+
     document.addEventListener('fullscreenchange', handleFsChange);
-    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+
+    // Initial check and auto-restore wake lock if preferred
+    setIsFullscreen(isBrowserFullscreen());
+    if (getKioskWakeLockPreferred()) {
+      acquireScreenWakeLock().then(() => setWakeLockActive(isWakeLockActive()));
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setIsFullscreen(isBrowserFullscreen());
+        if (getKioskWakeLockPreferred() || getKioskFullscreenPreferred()) {
+          acquireScreenWakeLock().then(() => setWakeLockActive(isWakeLockActive()));
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   const toggleFullscreen = async () => {
     try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
+      if (!isBrowserFullscreen()) {
+        setKioskFullscreenPreferred(true);
+        setKioskWakeLockPreferred(true);
+        await requestBrowserFullscreen();
+        await acquireScreenWakeLock();
+        setWakeLockActive(isWakeLockActive());
+        setIsFullscreen(isBrowserFullscreen());
       } else {
-        await document.exitFullscreen();
+        setKioskFullscreenPreferred(false);
+        setKioskWakeLockPreferred(false);
+        await exitBrowserFullscreen();
+        await releaseScreenWakeLock();
+        setWakeLockActive(false);
+        setIsFullscreen(false);
       }
     } catch (err) {
       console.warn('Fullscreen request failed:', err);
@@ -49,18 +100,14 @@ export const KioskControls: React.FC<KioskControlsProps> = ({
 
   const toggleWakeLock = async () => {
     try {
-      if (!wakeLockActive && 'wakeLock' in navigator) {
-        const sentinel = await (navigator as any).wakeLock.request('screen');
-        setWakeLockSentinel(sentinel);
-        setWakeLockActive(true);
-        sentinel.addEventListener('release', () => {
-          setWakeLockActive(false);
-          setWakeLockSentinel(null);
-        });
-      } else if (wakeLockSentinel) {
-        await wakeLockSentinel.release();
+      if (!wakeLockActive) {
+        setKioskWakeLockPreferred(true);
+        const ok = await acquireScreenWakeLock();
+        setWakeLockActive(ok);
+      } else {
+        setKioskWakeLockPreferred(false);
+        await releaseScreenWakeLock();
         setWakeLockActive(false);
-        setWakeLockSentinel(null);
       }
     } catch (err) {
       console.warn('Screen Wake Lock error:', err);

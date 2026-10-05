@@ -109,7 +109,7 @@ export default defineConfig(({ command }) => {
         modernPolyfills: true,
       }),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {
           name: 'FamCal - Family Organizer',
@@ -117,7 +117,8 @@ export default defineConfig(({ command }) => {
           description: 'Full-screen 9:16 portrait family organizer, calendar & photo slideshow',
           theme_color: '#0a0d14',
           background_color: '#0a0d14',
-          display: 'standalone',
+          display: 'fullscreen',
+          display_override: ['fullscreen', 'standalone', 'window-controls-overlay'],
           orientation: 'portrait',
           start_url: isBuild ? '/FamCal/' : '/',
           scope: isBuild ? '/FamCal/' : '/',

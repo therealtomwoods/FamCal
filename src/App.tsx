@@ -52,6 +52,14 @@ import { AlbumSelectModal } from './components/AlbumSelectModal';
 import { SettingsModal } from './components/SettingsModal';
 import { KioskControls } from './components/KioskControls';
 import { ClockWidget } from './components/ClockWidget';
+import {
+  isBrowserFullscreen,
+  requestBrowserFullscreen,
+  getKioskFullscreenPreferred,
+  setKioskFullscreenPreferred,
+  acquireScreenWakeLock,
+  getKioskWakeLockPreferred,
+} from './services/kioskService';
 
 const SETTINGS_KEY = 'famcal_user_settings';
 
@@ -133,9 +141,89 @@ export const App: React.FC = () => {
     });
   };
 
+  // Fullscreen Resilience & Kiosk Persistence
+  const [isKioskFsPreferred, setIsKioskFsPreferred] = useState<boolean>(getKioskFullscreenPreferred);
+  const [isCurrentFullscreen, setIsCurrentFullscreen] = useState<boolean>(isBrowserFullscreen);
+  const [dismissedRestorePrompt, setDismissedRestorePrompt] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const fs = isBrowserFullscreen();
+      setIsCurrentFullscreen(fs);
+      if (fs) {
+        setDismissedRestorePrompt(false);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    document.addEventListener('mozfullscreenchange', handleFsChange);
+
+    // Initial check
+    setIsCurrentFullscreen(isBrowserFullscreen());
+    setIsKioskFsPreferred(getKioskFullscreenPreferred());
+
+    // Auto wake lock acquisition on visibility change
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setIsCurrentFullscreen(isBrowserFullscreen());
+        if (getKioskWakeLockPreferred() || getKioskFullscreenPreferred()) {
+          acquireScreenWakeLock();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Global touch / click gesture handler to immediately re-enter fullscreen
+    // if fullscreen was dropped by an OS event (e.g. system notification, swipe, sleep wake)
+    const handleUserGesture = () => {
+      const preferred = getKioskFullscreenPreferred();
+      const fs = isBrowserFullscreen();
+      if (preferred && !fs) {
+        requestBrowserFullscreen().then((ok) => {
+          if (ok) {
+            setIsCurrentFullscreen(true);
+            acquireScreenWakeLock();
+          }
+        });
+      }
+    };
+
+    window.addEventListener('click', handleUserGesture, true);
+    window.addEventListener('touchend', handleUserGesture, true);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+      document.removeEventListener('mozfullscreenchange', handleFsChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('click', handleUserGesture, true);
+      window.removeEventListener('touchend', handleUserGesture, true);
+    };
+  }, []);
+
+  const handleRestoreFullscreen = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setKioskFullscreenPreferred(true);
+    setIsKioskFsPreferred(true);
+    requestBrowserFullscreen().then((ok) => {
+      if (ok) {
+        setIsCurrentFullscreen(true);
+        acquireScreenWakeLock();
+      }
+    });
+  };
+
+  const handleDismissRestorePrompt = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDismissedRestorePrompt(true);
+    setKioskFullscreenPreferred(false);
+    setIsKioskFsPreferred(false);
+  };
+
   // 1. Proactive Google OAuth Token Silent Renewal (runs on startup if expired, and checks every 15 minutes)
   useEffect(() => {
-    if (!settings.googleClientId || settings.isDemoMode) return;
+    if (!settings.googleClientId || settings.isDemoMode || !userToken) return;
 
     const renewTokenIfNeeded = async () => {
       if (isTokenExpired(600000)) {
@@ -156,7 +244,7 @@ export const App: React.FC = () => {
     renewTokenIfNeeded();
     const interval = setInterval(renewTokenIfNeeded, 15 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [settings.googleClientId, settings.isDemoMode]);
+  }, [settings.googleClientId, settings.isDemoMode, userToken]);
 
   // Proactive background photo baseUrl check (every minute heartbeat, refreshes when older than 25 minutes)
   useEffect(() => {
@@ -659,6 +747,30 @@ export const App: React.FC = () => {
 
   return (
     <div className="w-full h-full min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
+      {/* Floating Kiosk Fullscreen Recovery Pill */}
+      {isKioskFsPreferred && !isCurrentFullscreen && !dismissedRestorePrompt && (
+        <div
+          onClick={handleRestoreFullscreen}
+          className="fixed top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 bg-slate-900/95 border border-blue-500/60 rounded-full shadow-[0_0_25px_rgba(59,130,246,0.3)] backdrop-blur-md text-xs font-medium text-slate-200 cursor-pointer animate-pulse select-none hover:bg-slate-800 transition"
+        >
+          <span className="w-2 h-2 rounded-full bg-blue-400" />
+          <span>Kiosk Fullscreen Paused — Tap anywhere to resume</span>
+          <button
+            onClick={handleRestoreFullscreen}
+            className="px-2.5 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded-full text-xs font-bold transition shadow"
+          >
+            Restore
+          </button>
+          <button
+            onClick={handleDismissRestorePrompt}
+            title="Dismiss"
+            className="p-1 text-slate-400 hover:text-white rounded"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Aspect Display Container (Vertical 9:16 or Horizontal 16:9/Widescreen) */}
       <div
         className={`w-full h-full flex flex-col transition-all duration-300 ${
