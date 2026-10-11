@@ -36,10 +36,7 @@ import {
   cancelActivePickerSession,
   getStoredPickedPhotos,
   loadStoredPhotos,
-  savePhotosToIndexedDB,
-  saveStoredPickedPhotos,
   clearStoredPickedPhotos,
-  hydratePhotosWithImages,
   refreshPhotoUrls,
 } from './services/googlePhotos';
 import { fetchLiveWeather, detectBrowserLocation, geocodeLocation } from './services/weatherService';
@@ -304,52 +301,7 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const hydratedBatchRef = useRef<string>('');
 
-  // 2. Automatically hydrate unhydrated Google Photos whenever userToken is available
-  useEffect(() => {
-    if (!userToken || settings.isDemoMode) return;
-
-    const unhydrated = photos.filter(
-      (p) =>
-        p.baseUrl &&
-        !p.url.startsWith('data:') &&
-        !p.url.startsWith('blob:') &&
-        !p.url.includes('unsplash.com') &&
-        !(p as any)._hydrationAttempted
-    );
-
-    if (unhydrated.length === 0) return;
-
-    const batchSig = photos.map((p) => p.id).join(',');
-    if (hydratedBatchRef.current === batchSig) return;
-    hydratedBatchRef.current = batchSig;
-
-    let isMounted = true;
-    hydratePhotosWithImages(photos, userToken, (progress) => {
-      if (isMounted) {
-        setPhotosStatus({ success: true, message: progress });
-      }
-    })
-      .then((hydrated) => {
-        if (!isMounted) return;
-        setPhotos(hydrated);
-        savePhotosToIndexedDB(hydrated);
-        saveStoredPickedPhotos(hydrated);
-        const readyCount = hydrated.filter((p) => p.url.startsWith('data:') || p.url.startsWith('blob:')).length;
-        setPhotosStatus({
-          success: true,
-          message: `✓ ${readyCount} Google Photos loaded for slideshow`,
-        });
-      })
-      .catch((err) => {
-        console.warn('Auto-hydration failed:', err);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [userToken, photos, settings.isDemoMode]);
 
   // 1. Auto-detect user's local weather location on first startup if still default SF
   useEffect(() => {

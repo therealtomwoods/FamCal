@@ -3,6 +3,84 @@ import react from '@vitejs/plugin-react';
 import legacy from '@vitejs/plugin-legacy';
 import { VitePWA } from 'vite-plugin-pwa';
 
+function registerMiddlewares(middlewares: any) {
+  // Stock Quote Proxy
+  middlewares.use('/api/stock', async (req: any, res: any) => {
+    try {
+      const url = new URL(req.url || '', 'http://localhost');
+      const symbol = (url.searchParams.get('symbol') || 'GOOGL').toUpperCase();
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+      const fetchRes = await fetch(targetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          'Accept': 'application/json',
+        },
+      });
+      if (!fetchRes.ok) {
+        res.statusCode = fetchRes.status;
+        res.end(JSON.stringify({ error: `Yahoo returned HTTP ${fetchRes.status}` }));
+        return;
+      }
+      const data = await fetchRes.text();
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.end(data);
+    } catch (err: any) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  });
+
+  // Google Photos Byte Proxy with CORS
+  middlewares.use('/api/photo', async (req: any, res: any) => {
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    try {
+      const url = new URL(req.url || '', 'http://localhost');
+      const targetUrl = url.searchParams.get('url');
+      if (!targetUrl || !targetUrl.startsWith('https://')) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Missing or invalid url parameter' }));
+        return;
+      }
+
+      const authHeader = req.headers['authorization'];
+      const fetchHeaders: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      };
+      if (authHeader) {
+        fetchHeaders['Authorization'] = authHeader;
+      }
+
+      const fetchRes = await fetch(targetUrl, { headers: fetchHeaders });
+      if (!fetchRes.ok) {
+        res.statusCode = fetchRes.status;
+        res.end(JSON.stringify({ error: `Google CDN returned HTTP ${fetchRes.status}` }));
+        return;
+      }
+
+      const arrayBuf = await fetchRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+      const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.end(buffer);
+    } catch (err: any) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  });
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => {
   const isBuild = command === 'build';
@@ -26,81 +104,10 @@ export default defineConfig(({ command }) => {
       {
         name: 'photo-and-stock-proxy-middleware',
         configureServer(server) {
-          // Stock Quote Proxy
-          server.middlewares.use('/api/stock', async (req, res) => {
-            try {
-              const url = new URL(req.url || '', 'http://localhost');
-              const symbol = (url.searchParams.get('symbol') || 'GOOGL').toUpperCase();
-              const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-              const fetchRes = await fetch(targetUrl, {
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                  'Accept': 'application/json',
-                },
-              });
-              if (!fetchRes.ok) {
-                res.statusCode = fetchRes.status;
-                res.end(JSON.stringify({ error: `Yahoo returned HTTP ${fetchRes.status}` }));
-                return;
-              }
-              const data = await fetchRes.text();
-              res.setHeader('Content-Type', 'application/json');
-              res.setHeader('Access-Control-Allow-Origin', '*');
-              res.end(data);
-            } catch (err: any) {
-              res.statusCode = 500;
-              res.end(JSON.stringify({ error: err.message }));
-            }
-          });
-
-          // Google Photos Byte Proxy with CORS
-          server.middlewares.use('/api/photo', async (req, res) => {
-            if (req.method === 'OPTIONS') {
-              res.setHeader('Access-Control-Allow-Origin', '*');
-              res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-              res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-              res.statusCode = 204;
-              res.end();
-              return;
-            }
-
-            try {
-              const url = new URL(req.url || '', 'http://localhost');
-              const targetUrl = url.searchParams.get('url');
-              if (!targetUrl || !targetUrl.startsWith('https://')) {
-                res.statusCode = 400;
-                res.end(JSON.stringify({ error: 'Missing or invalid url parameter' }));
-                return;
-              }
-
-              const authHeader = req.headers['authorization'];
-              const fetchHeaders: Record<string, string> = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-              };
-              if (authHeader) {
-                fetchHeaders['Authorization'] = authHeader;
-              }
-
-              const fetchRes = await fetch(targetUrl, { headers: fetchHeaders });
-              if (!fetchRes.ok) {
-                res.statusCode = fetchRes.status;
-                res.end(JSON.stringify({ error: `Google CDN returned HTTP ${fetchRes.status}` }));
-                return;
-              }
-
-              const arrayBuf = await fetchRes.arrayBuffer();
-              const buffer = Buffer.from(arrayBuf);
-              const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
-
-              res.setHeader('Content-Type', contentType);
-              res.setHeader('Access-Control-Allow-Origin', '*');
-              res.setHeader('Cache-Control', 'public, max-age=86400');
-              res.end(buffer);
-            } catch (err: any) {
-              res.statusCode = 500;
-              res.end(JSON.stringify({ error: err.message }));
-            }
-          });
+          registerMiddlewares(server.middlewares);
+        },
+        configurePreviewServer(server) {
+          registerMiddlewares(server.middlewares);
         },
       },
       legacy({

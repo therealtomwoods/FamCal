@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { PhotoItem } from '../types';
-import { Image, FolderOpen, ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
+import { Image, FolderOpen, ChevronLeft, ChevronRight, Calendar, Loader2 } from 'lucide-react';
+import { usePhotoCache } from '../services/photoCache';
 
 interface SlideshowProps {
   photos: PhotoItem[];
@@ -36,7 +37,6 @@ export const formatPhotoDate = (photo?: PhotoItem | null): string | undefined =>
   // 1. If explicit dateTaken exists
   if (photo.dateTaken && photo.dateTaken.trim()) {
     const raw = photo.dateTaken.trim();
-    // If it's already a clean string like "July 14, 2026" or "Jul 14, 2026"
     if (/^[A-Za-z]+\s+\d{1,2},\s+\d{4}$/.test(raw) || /^\d{1,2}\s+[A-Za-z]+,?\s+\d{4}$/.test(raw)) {
       return raw;
     }
@@ -89,32 +89,31 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
   intervalSeconds,
   onOpenAlbumPicker,
+  userToken,
   onPhotosNeedRefresh,
   isSessionExpired,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
-  const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
-  const [showLoadingBadge, setShowLoadingBadge] = useState(false);
+  const lastWorkingSrcRef = useRef<string | null>(null);
 
-  // Auto-reset failed photo statuses whenever fresh URLs are loaded
-  useEffect(() => {
-    setFailedPhotoIds({});
-  }, [photos]);
+  const photosCount = photos?.length || 0;
+
+  // In-memory sliding-window cache hook:
+  // Sequentially caches upcoming photos in the background (a few at a time).
+  // Zero database overhead, instant slide transitions, auto-evicts old blobs.
+  const {
+    getPhotoSrc,
+    isPhotoReady,
+    isPhotoLoading,
+    hasPhotoFailed,
+  } = usePhotoCache(photos, currentIndex, userToken, onPhotosNeedRefresh);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  const photosCount = photos?.length || 0;
-  const autoSkipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const badgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const transitionTo = useCallback((nextIdx: number) => {
-    if (autoSkipTimerRef.current) {
-      clearTimeout(autoSkipTimerRef.current);
-      autoSkipTimerRef.current = null;
-    }
     const current = currentIndexRef.current;
     if (current !== nextIdx) {
       setPreviousIndex(current);
@@ -164,36 +163,23 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     }
   }, [photosCount, currentIndex]);
 
-  // Temporary corner badge logic: auto-dismiss after 4 seconds so it never lingers indefinitely
+  // If the active photo permanently failed to load, automatically advance to next after 1.5s
   useEffect(() => {
-    if (badgeTimerRef.current) {
-      clearTimeout(badgeTimerRef.current);
-      badgeTimerRef.current = null;
+    if (hasPhotoFailed(currentIndex) && photosCount > 1) {
+      const timer = setTimeout(() => {
+        transitionTo((currentIndex + 1) % photosCount);
+      }, 1500);
+      return () => clearTimeout(timer);
     }
+  }, [currentIndex, hasPhotoFailed, photosCount, transitionTo]);
 
-    const currentPhoto = photos?.[currentIndex];
-    const isUnhydrated =
-      currentPhoto?.baseUrl &&
-      !currentPhoto.url.startsWith('data:') &&
-      !currentPhoto.url.startsWith('blob:') &&
-      !currentPhoto.url.includes('unsplash.com');
-
-    const photoKey = currentPhoto?.id || String(currentIndex);
-    const hasFailed = failedPhotoIds[photoKey];
-
-    if (isUnhydrated && !hasFailed) {
-      setShowLoadingBadge(true);
-      badgeTimerRef.current = setTimeout(() => {
-        setShowLoadingBadge(false);
-      }, 4000);
-    } else {
-      setShowLoadingBadge(false);
+  // Keep last working image updated
+  const currentSrc = getPhotoSrc(currentIndex);
+  useEffect(() => {
+    if (currentSrc) {
+      lastWorkingSrcRef.current = currentSrc;
     }
-
-    return () => {
-      if (badgeTimerRef.current) clearTimeout(badgeTimerRef.current);
-    };
-  }, [currentIndex, photos, failedPhotoIds]);
+  }, [currentSrc]);
 
   const currentPhoto = photos?.[currentIndex];
 
@@ -205,26 +191,6 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
     transitionTo((currentIndex + 1) % photosCount);
-  };
-
-  const lastWorkingSrcRef = useRef<string | null>(null);
-
-  // Gracefully handle image load failure: mark as failed and request background refresh
-  const handleImageError = (photoKey: string, idx: number) => {
-    if (failedPhotoIds[photoKey]) return; // Already handled
-
-    setFailedPhotoIds((prev) => ({ ...prev, [photoKey]: true }));
-
-    const failedPhoto = photos?.[idx];
-    const isGooglePhoto =
-      failedPhoto?.url?.includes('googleusercontent.com') ||
-      failedPhoto?.baseUrl?.includes('googleusercontent.com') ||
-      failedPhoto?.url?.includes('photospicker.googleapis.com');
-
-    // If an active Google Photos URL failed (likely expired baseUrl), alert parent to fetch fresh baseUrls
-    if (isGooglePhoto && onPhotosNeedRefresh) {
-      onPhotosNeedRefresh();
-    }
   };
 
   if (!photos || photos.length === 0) {
@@ -245,29 +211,37 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     );
   }
 
+  // Virtualized slide window: only mount active, previous (during crossfade), and next (preloading)
+  const visibleIndices: number[] = [currentIndex];
+  if (previousIndex !== null && previousIndex !== currentIndex) {
+    visibleIndices.push(previousIndex);
+  }
+  const nextIdx = (currentIndex + 1) % photosCount;
+  if (nextIdx !== currentIndex && !visibleIndices.includes(nextIdx)) {
+    visibleIndices.push(nextIdx);
+  }
+
+  const isCurrentLoading = !isPhotoReady(currentIndex) && isPhotoLoading(currentIndex);
+
   return (
     <div
       className="relative w-full h-full min-h-[200px] overflow-hidden select-none bg-black group"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {/* Background Slides with crossfade transition (virtualized 3-slide buffer) */}
-      {photos.map((photo, idx) => {
+      {/* Background Slides with crossfade transition (strictly virtualized 3-slide buffer) */}
+      {visibleIndices.map((idx) => {
+        const photo = photos[idx];
+        if (!photo) return null;
+
         const isCurrent = idx === currentIndex;
-        const isPrev = idx === previousIndex;
-        const isNext = idx === (currentIndex + 1) % photos.length;
-
-        // Virtual DOM windowing: only mount active, crossfading-out, and preloading slides
-        if (photos.length > 3 && !isCurrent && !isPrev && !isNext) {
-          return null;
-        }
-
         const isActive = isCurrent;
-        const photoKey = photo.id || String(idx);
-        const isFailed = Boolean(failedPhotoIds[photoKey]);
-        const displaySrc = isFailed
-          ? (lastWorkingSrcRef.current || RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length])
-          : photo.url;
+        const rawSrc = getPhotoSrc(idx);
+
+        // If active slide's blob isn't loaded yet, fall back to last working image or reliable family fallback
+        const displaySrc = rawSrc || (isCurrent ? lastWorkingSrcRef.current || RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length] : undefined);
+
+        if (!displaySrc) return null;
 
         return (
           <div
@@ -281,31 +255,26 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               alt={photo.caption && !isFileName(photo.caption, photo.filename) ? photo.caption : 'Family photo'}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center"
-              loading={idx === 0 ? 'eager' : 'lazy'}
+              loading={isCurrent ? 'eager' : 'lazy'}
               onLoad={() => {
-                if (!isFailed) {
-                  lastWorkingSrcRef.current = photo.url;
-                }
-              }}
-              onError={() => {
-                if (!isFailed) {
-                  handleImageError(photoKey, idx);
+                if (rawSrc) {
+                  lastWorkingSrcRef.current = rawSrc;
                 }
               }}
             />
-
-            {/* Temporary non-intrusive loading badge (auto-dismisses after 4s, never lingers) */}
-            {showLoadingBadge && isActive && !isFailed && (
-              <div className="absolute bottom-10 right-4 z-10 pointer-events-none transition-opacity duration-500">
-                <span className="text-[10px] text-blue-200 bg-black/60 backdrop-blur-sm px-2.5 py-0.5 rounded-full border border-blue-400/30 flex items-center gap-1.5 shadow-sm">
-                  <Image className="w-3 h-3 text-blue-400 animate-pulse" />
-                  Loading photo...
-                </span>
-              </div>
-            )}
           </div>
         );
       })}
+
+      {/* Non-intrusive background caching pill (shows briefly only when downloading active slide) */}
+      {isCurrentLoading && (
+        <div className="absolute bottom-12 right-4 z-10 pointer-events-none transition-opacity duration-500">
+          <span className="text-[10px] text-blue-200 bg-black/60 backdrop-blur-sm px-2.5 py-0.5 rounded-full border border-blue-400/30 flex items-center gap-1.5 shadow-sm">
+            <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
+            Caching photos...
+          </span>
+        </div>
+      )}
 
       {/* 7-Day Session Expiration Indicator */}
       {isSessionExpired && (

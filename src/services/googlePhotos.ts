@@ -3,7 +3,6 @@ import { DEMO_ALBUMS, DEMO_PHOTOS } from '../mock/demoData';
 
 export const PICKED_PHOTOS_KEY = 'famcal_picked_photos';
 const DB_NAME = 'FamCalPhotosDB';
-const STORE_NAME = 'photos';
 
 export interface PickerSession {
   id: string;
@@ -74,51 +73,19 @@ export function getActivePickerSession(): { id: string; token: string } | null {
   return currentActiveSession;
 }
 
-/**
- * Native browser IndexedDB database for persistent high-resolution photo caching
- */
-function openPhotoDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      return reject(new Error('IndexedDB not supported'));
-    }
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore(STORE_NAME);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
 
-export async function savePhotosToIndexedDB(photos: PhotoItem[]): Promise<void> {
-  try {
-    const db = await openPhotoDB();
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.put(photos, 'active_photos');
-  } catch (err) {
-    console.warn('Failed to save photos to IndexedDB:', err);
-  }
+
+export async function savePhotosToIndexedDB(_photos: PhotoItem[]): Promise<void> {
+  // Database caching removed: Chrome browser in-memory sliding window cache is used instead
+  return Promise.resolve();
 }
 
 export async function loadPhotosFromIndexedDB(): Promise<PhotoItem[] | null> {
-  try {
-    const db = await openPhotoDB();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.get('active_photos');
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**
- * Retrieve cached picked photos from localStorage or IndexedDB
+ * Retrieve cached picked photos metadata from localStorage
  */
 export function getStoredPickedPhotos(): PhotoItem[] {
   try {
@@ -132,34 +99,39 @@ export function getStoredPickedPhotos(): PhotoItem[] {
 }
 
 /**
- * Load stored photos prioritizing IndexedDB high-resolution cache
+ * Load stored photos metadata directly from localStorage without database overhead.
+ * Cleans up legacy bloated IndexedDB databases from previous versions.
  */
 export async function loadStoredPhotos(): Promise<PhotoItem[]> {
-  const idbPhotos = await loadPhotosFromIndexedDB();
-  if (idbPhotos && idbPhotos.length > 0) {
-    return idbPhotos;
+  if (typeof indexedDB !== 'undefined') {
+    try {
+      indexedDB.deleteDatabase(DB_NAME);
+    } catch {
+      // ignore
+    }
   }
   return getStoredPickedPhotos();
 }
 
 /**
- * Cache picked photos in localStorage so slideshow runs seamlessly across reloads
+ * Cache picked photos metadata in localStorage so slideshow runs seamlessly across reloads.
+ * Strips huge base64 strings and temporary blob URLs so localStorage never exceeds quota.
  */
 export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
   try {
-    localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(photos));
+    const lightweight = photos.map((p) => ({
+      id: p.id,
+      url: p.baseUrl || (p.url.startsWith('data:') || p.url.startsWith('blob:') ? '' : p.url),
+      baseUrl: p.baseUrl,
+      filename: p.filename,
+      caption: p.caption,
+      dateTaken: p.dateTaken,
+      width: p.width,
+      height: p.height,
+    }));
+    localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(lightweight));
   } catch (err) {
-    console.warn('LocalStorage full, saving lightweight version to localStorage:', err);
-    try {
-      const lightweight = photos.map((p) => ({
-        ...p,
-        // Only strip data URL if localStorage is full
-        url: p.url.startsWith('data:') && p.baseUrl ? `${p.baseUrl}=w1200-h800` : p.url,
-      }));
-      localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(lightweight));
-    } catch {
-      // ignore
-    }
+    console.warn('Failed to save picked photos to localStorage:', err);
   }
 }
 
@@ -177,13 +149,12 @@ export function clearStoredPickedPhotos(token?: string | null): void {
       deletePickerSession(token, sessionId).catch(() => {});
     }
   }
-  try {
-    openPhotoDB().then((db) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).delete('active_photos');
-    });
-  } catch {
-    // ignore
+  if (typeof indexedDB !== 'undefined') {
+    try {
+      indexedDB.deleteDatabase(DB_NAME);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -237,9 +208,14 @@ export async function downloadPhotoBlob(baseUrl: string, token?: string): Promis
     // fallback to direct fetch
   }
 
-  // 2. Direct unauthenticated fetch (simple GET, no CORS preflight)
+  // 2. Direct authenticated fetch (Google Photos Picker API allows direct GET with Bearer token)
   try {
+    const directHeaders: Record<string, string> = {};
+    if (token) {
+      directHeaders['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetchWithTimeout(targetUrl, {
+      headers: directHeaders,
       referrerPolicy: 'no-referrer',
     }, 6000);
     if (res.ok) {
@@ -255,7 +231,12 @@ export async function downloadPhotoBlob(baseUrl: string, token?: string): Promis
   // 3. Direct fetch with download parameter (=d)
   try {
     const origUrl = `${cleanBase}=d`;
+    const directHeaders: Record<string, string> = {};
+    if (token) {
+      directHeaders['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetchWithTimeout(origUrl, {
+      headers: directHeaders,
       referrerPolicy: 'no-referrer',
     }, 6000);
     if (res.ok) {
@@ -272,66 +253,17 @@ export async function downloadPhotoBlob(baseUrl: string, token?: string): Promis
 }
 
 /**
- * Hydrates photo items by downloading authenticated image bytes in parallel batches
- * and turning them into self-contained Data URLs.
+ * Deprecated: Previously attempted to download hundreds of photos into base64 data URLs in bulk.
+ * FamCal now uses an in-memory sliding-window cache in Chrome that sequentially caches photos
+ * a few at a time in the background as needed with zero database overhead.
  */
 export async function hydratePhotosWithImages(
   photos: PhotoItem[],
-  token: string,
-  onProgress?: (msg: string) => void,
-  onBatchComplete?: (updatedPhotos: PhotoItem[]) => void
+  _token?: string,
+  _onProgress?: (msg: string) => void,
+  _onBatchComplete?: (updatedPhotos: PhotoItem[]) => void
 ): Promise<PhotoItem[]> {
-  const result: PhotoItem[] = photos.map((p) => ({ ...p }));
-  const itemsToHydrate: { index: number; photo: PhotoItem }[] = [];
-
-  for (let i = 0; i < photos.length; i++) {
-    const p = photos[i];
-    if (
-      p.baseUrl &&
-      !p.url.startsWith('data:') &&
-      !p.url.startsWith('blob:') &&
-      !p.url.includes('unsplash.com') &&
-      !(p as any)._hydrationAttempted
-    ) {
-      itemsToHydrate.push({ index: i, photo: { ...p } });
-    }
-  }
-
-  if (itemsToHydrate.length === 0) {
-    return photos;
-  }
-
-  let completedCount = 0;
-  const total = itemsToHydrate.length;
-  const batchSize = 4; // 4 concurrent downloads for optimal throughput
-
-  for (let b = 0; b < itemsToHydrate.length; b += batchSize) {
-    const currentBatch = itemsToHydrate.slice(b, b + batchSize);
-    await Promise.all(
-      currentBatch.map(async ({ index, photo }) => {
-        (photo as any)._hydrationAttempted = true;
-        try {
-          const blob = await downloadPhotoBlob(photo.baseUrl!, token);
-          if (blob) {
-            try {
-              const dataUrl = await blobToDataUrl(blob);
-              photo.url = dataUrl;
-            } catch {
-              photo.url = URL.createObjectURL(blob);
-            }
-          }
-        } catch (err) {
-          console.warn(`Failed hydrating photo ${index + 1}:`, err);
-        }
-        completedCount++;
-        result[index] = photo;
-      })
-    );
-    onProgress?.(`Caching photos (${completedCount} of ${total})...`);
-    onBatchComplete?.([...result]);
-  }
-
-  return result;
+  return photos;
 }
 
 /**
@@ -549,32 +481,17 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
  */
 async function processAndStreamPickedPhotos(
   rawPhotos: PhotoItem[],
-  token: string,
+  _token: string,
   onStatusUpdate?: (status: string) => void,
   onPhotosUpdated?: (photos: PhotoItem[]) => void
 ): Promise<PhotoItem[]> {
-  // 1. Immediately save the full list to IndexedDB and localStorage
+  // 1. Immediately save lightweight metadata to localStorage
   saveStoredPickedPhotos(rawPhotos);
-  savePhotosToIndexedDB(rawPhotos);
   localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
   localStorage.removeItem('famcal_picker_session_expired');
 
   onPhotosUpdated?.(rawPhotos);
   onStatusUpdate?.(`✓ Successfully loaded ${rawPhotos.length} family photos!`);
-
-  // Optional background hydration for any local caching if supported
-  setTimeout(() => {
-    hydratePhotosWithImages(
-      rawPhotos,
-      token,
-      undefined,
-      (updated) => {
-        saveStoredPickedPhotos(updated);
-        savePhotosToIndexedDB(updated);
-        onPhotosUpdated?.(updated);
-      }
-    ).catch(() => {});
-  }, 500);
 
   return rawPhotos;
 }
@@ -628,18 +545,14 @@ export async function refreshPhotoUrls(
 
         const merged = freshPhotos.map((fresh) => {
           const old = existingMap.get(fresh.id);
-          const hasHydratedUrl = old?.url && (old.url.startsWith('data:') || old.url.startsWith('blob:'));
           return {
             ...fresh,
-            // Preserve persistent hydrated image data if already downloaded and cached
-            url: hasHydratedUrl ? old.url : fresh.url,
             caption: old?.caption || fresh.caption,
             dateTaken: old?.dateTaken || fresh.dateTaken,
           };
         });
 
         saveStoredPickedPhotos(merged);
-        savePhotosToIndexedDB(merged);
         localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
         localStorage.removeItem('famcal_picker_session_expired');
         console.log(`✓ Successfully refreshed ${merged.length} photo baseUrls from Google Photos Picker session`);
@@ -672,7 +585,6 @@ export async function refreshPhotoUrls(
       const freshAlbumPhotos = await fetchAlbumPhotos(token, currentAlbumId);
       if (freshAlbumPhotos.length > 0) {
         saveStoredPickedPhotos(freshAlbumPhotos);
-        savePhotosToIndexedDB(freshAlbumPhotos);
         localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
         return { success: true, photos: freshAlbumPhotos };
       }
