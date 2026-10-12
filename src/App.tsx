@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   selectedAlbumName: '📸 All Recent Google Photos',
   slideshowInterval: 10,
   slideshowTransition: 'fade',
+  slideshowRandomOrder: true,
   showWeather: true,
   showStockTicker: true,
   showDigitalClock: true,
@@ -750,6 +751,7 @@ export const App: React.FC = () => {
             userToken={userToken}
             onPhotosNeedRefresh={handlePhotosNeedRefresh}
             isSessionExpired={isPhotosSessionExpired}
+            randomOrder={settings.slideshowRandomOrder ?? true}
           />
 
           {/* Top-Right Large Clock */}

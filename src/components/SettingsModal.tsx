@@ -20,6 +20,7 @@ import {
   Locate,
   Columns4,
   Smartphone,
+  Shuffle,
 } from 'lucide-react';
 import { geocodeLocation, detectBrowserLocation, fetchLiveWeather } from '../services/weatherService';
 
@@ -965,6 +966,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>30 sec</span>
                   <span>60 sec (Slow)</span>
                 </div>
+              </div>
+
+              {/* Randomize / Shuffle Photos Toggle */}
+              <div className="p-3.5 rounded-xl bg-slate-800/60 border border-white/5 flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-white flex items-center gap-2">
+                    <Shuffle className="w-4 h-4 text-pink-400" />
+                    <span>Randomize Photos</span>
+                  </p>
+                  <p className="text-xs text-slate-400">Shuffle slideshow order instead of chronological by date</p>
+                </div>
+                <button
+                  onClick={() =>
+                    onUpdateSettings({
+                      slideshowRandomOrder: settings.slideshowRandomOrder === false ? true : false,
+                    })
+                  }
+                  className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+                    settings.slideshowRandomOrder !== false ? 'bg-pink-600' : 'bg-slate-700'
+                  }`}
+                  aria-label="Toggle randomize photos"
+                >
+                  <div
+                    className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                      settings.slideshowRandomOrder !== false ? 'translate-x-6' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
 
               {/* Time Format */}

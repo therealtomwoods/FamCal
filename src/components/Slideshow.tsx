@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PhotoItem } from '../types';
-import { Image, FolderOpen, ChevronLeft, ChevronRight, Calendar, Loader2 } from 'lucide-react';
+import { Image, FolderOpen, ChevronLeft, ChevronRight, Calendar, Loader2, Shuffle } from 'lucide-react';
 import { usePhotoCache } from '../services/photoCache';
 
 interface SlideshowProps {
@@ -11,6 +11,7 @@ interface SlideshowProps {
   userToken?: string | null;
   onPhotosNeedRefresh?: () => void;
   isSessionExpired?: boolean;
+  randomOrder?: boolean;
 }
 
 const isFileName = (text?: string, filename?: string): boolean => {
@@ -85,6 +86,18 @@ const RELIABLE_FALLBACKS = [
   'https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&w=1400&q=85',
 ];
 
+/**
+ * Fisher-Yates unbiased shuffle algorithm
+ */
+function shuffleArray<T>(items: T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
   intervalSeconds,
@@ -92,13 +105,51 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   userToken,
   onPhotosNeedRefresh,
   isSessionExpired,
+  randomOrder = true,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
+  const [shuffleVersion, setShuffleVersion] = useState(0);
   const lastWorkingSrcRef = useRef<string | null>(null);
 
-  const photosCount = photos?.length || 0;
+  // Shuffled photo IDs reference to preserve consistent sequence across background baseUrl refreshes
+  const shuffledIdsRef = useRef<string[]>([]);
+
+  // Compute active display sequence: randomized or chronological
+  const displayPhotos = useMemo(() => {
+    if (!photos || photos.length === 0) return [];
+
+    if (!randomOrder) {
+      shuffledIdsRef.current = [];
+      return photos;
+    }
+
+    const currentIds = photos.map((p) => p.id);
+    const existingIds = shuffledIdsRef.current;
+    const existingSet = new Set(existingIds);
+
+    // If existing shuffled set matches current photos (e.g. background baseUrl refresh at 25m),
+    // preserve the exact same random order and update objects with fresh URLs seamlessly!
+    const hasSameIds =
+      existingIds.length === currentIds.length &&
+      existingIds.length > 0 &&
+      currentIds.every((id) => existingSet.has(id));
+
+    if (hasSameIds) {
+      const photoMap = new Map(photos.map((p) => [p.id, p]));
+      return existingIds
+        .map((id) => photoMap.get(id))
+        .filter(Boolean) as PhotoItem[];
+    }
+
+    // New photo collection or manual reshuffle triggered: generate fresh unbiased shuffle
+    const shuffled = shuffleArray(photos);
+    shuffledIdsRef.current = shuffled.map((p) => p.id);
+    return shuffled;
+  }, [photos, randomOrder, shuffleVersion]);
+
+  const photosCount = displayPhotos?.length || 0;
 
   // In-memory sliding-window cache hook:
   // Sequentially caches upcoming photos in the background (a few at a time).
@@ -108,7 +159,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     isPhotoReady,
     isPhotoLoading,
     hasPhotoFailed,
-  } = usePhotoCache(photos, currentIndex, userToken, onPhotosNeedRefresh);
+  } = usePhotoCache(displayPhotos, currentIndex, userToken, onPhotosNeedRefresh);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -181,7 +232,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     }
   }, [currentSrc]);
 
-  const currentPhoto = photos?.[currentIndex];
+  const currentPhoto = displayPhotos?.[currentIndex];
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -193,7 +244,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     transitionTo((currentIndex + 1) % photosCount);
   };
 
-  if (!photos || photos.length === 0) {
+  const handleReshuffle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (photos && photos.length > 0) {
+      const shuffled = shuffleArray(photos);
+      shuffledIdsRef.current = shuffled.map((p) => p.id);
+      setShuffleVersion((v) => v + 1);
+      setCurrentIndex(0);
+      setPreviousIndex(null);
+    }
+  };
+
+  if (!displayPhotos || displayPhotos.length === 0) {
     return (
       <div className="relative w-full h-full bg-slate-900 flex flex-col items-center justify-center p-6 text-center border-b border-slate-800">
         <div className="w-16 h-16 rounded-full bg-slate-800/80 flex items-center justify-center mb-3 text-slate-400">
@@ -231,7 +293,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     >
       {/* Background Slides with crossfade transition (strictly virtualized 3-slide buffer) */}
       {visibleIndices.map((idx) => {
-        const photo = photos[idx];
+        const photo = displayPhotos[idx];
         if (!photo) return null;
 
         const isCurrent = idx === currentIndex;
@@ -296,8 +358,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       {/* Bottom gradient scrim blending into the middle / calendar section */}
       <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-slate-950 via-slate-950/70 to-transparent pointer-events-none" />
 
-      {/* Prev / Next controls on hover or touch */}
-      {photos.length > 1 && (
+      {/* Controls on hover or touch */}
+      {photosCount > 1 && (
         <div
           className={`absolute inset-y-0 left-2 right-2 flex items-center justify-between z-10 transition-opacity duration-200 ${
             isHovered ? 'opacity-100' : 'opacity-0'
@@ -310,6 +372,20 @@ export const Slideshow: React.FC<SlideshowProps> = ({
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
+
+          {/* Quick Reshuffle button on hover */}
+          {randomOrder && (
+            <button
+              onClick={handleReshuffle}
+              className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-pink-500/30 text-white text-[11px] font-semibold flex items-center gap-1.5 hover:bg-black/90 transition shadow-lg pointer-events-auto"
+              title="Reshuffle photos in random order"
+              aria-label="Reshuffle photos"
+            >
+              <Shuffle className="w-3 h-3 text-pink-400" />
+              <span>Shuffle</span>
+            </button>
+          )}
+
           <button
             onClick={handleNext}
             className="w-8 h-8 rounded-full bg-black/60 backdrop-blur-md border border-white/20 text-white flex items-center justify-center hover:bg-black/90 transition shadow-lg"

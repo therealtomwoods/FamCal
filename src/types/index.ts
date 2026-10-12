@@ -94,6 +94,7 @@ export interface AppSettings {
   selectedAlbumName: string;
   slideshowInterval: number; // seconds
   slideshowTransition: 'fade' | 'slide' | 'zoom';
+  slideshowRandomOrder?: boolean; // Randomized / shuffled photo playback
   showWeather: boolean;
   showStockTicker: boolean;
   showDigitalClock: boolean;
