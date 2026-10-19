@@ -8,7 +8,66 @@ interface CachedPhoto {
   lastAccessed: number;
 }
 
-// Global in-memory cache of active object URLs (never touches IndexedDB or localStorage)
+const DISK_CACHE_NAME = 'famcal-photo-blobs-v1';
+
+function getDiskCacheUrl(photoId: string): string {
+  return `https://famcal-cache.local/photo/${encodeURIComponent(photoId)}`;
+}
+
+export async function getDiskCachedBlob(photoId: string): Promise<Blob | null> {
+  if (typeof caches === 'undefined' || !photoId) return null;
+  try {
+    const cache = await caches.open(DISK_CACHE_NAME);
+    const res = await cache.match(getDiskCacheUrl(photoId));
+    if (res && res.ok) {
+      const blob = await res.blob();
+      if (blob && blob.size > 200) {
+        return blob;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export async function hasDiskCachedBlob(photoId: string): Promise<boolean> {
+  if (typeof caches === 'undefined' || !photoId) return false;
+  try {
+    const cache = await caches.open(DISK_CACHE_NAME);
+    const res = await cache.match(getDiskCacheUrl(photoId));
+    return Boolean(res && res.ok);
+  } catch {
+    return false;
+  }
+}
+
+export async function putDiskCachedBlob(photoId: string, blob: Blob): Promise<void> {
+  if (typeof caches === 'undefined' || !photoId || !blob || blob.size <= 200) return;
+  try {
+    const cache = await caches.open(DISK_CACHE_NAME);
+    const response = new Response(blob, {
+      headers: {
+        'Content-Type': blob.type || 'image/jpeg',
+        'Cache-Control': 'public, max-age=31536000',
+      },
+    });
+    await cache.put(getDiskCacheUrl(photoId), response);
+  } catch {
+    // ignore storage quota errors gracefully
+  }
+}
+
+export async function clearDiskPhotoCache(): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  try {
+    await caches.delete(DISK_CACHE_NAME);
+  } catch {
+    // ignore
+  }
+}
+
+// Global in-memory cache of active object URLs (keeps at most 10 object URLs in RAM)
 class PhotoMemoryCache {
   private cache = new Map<string, CachedPhoto>();
   private inFlight = new Map<string, Promise<string | null>>();
@@ -147,7 +206,7 @@ class PhotoMemoryCache {
   }
 
   /**
-   * Load photo blob with deduplication
+   * Load photo blob with deduplication (checks RAM -> persistent CacheStorage -> network)
    */
   async loadPhoto(
     photo: PhotoItem,
@@ -170,22 +229,35 @@ class PhotoMemoryCache {
       return photo.url;
     }
 
-    // 4. If recently marked failed, skip
-    if (this.isFailed(photoId)) {
-      return null;
-    }
-
-    // 5. In-flight request deduplication
+    // 4. In-flight request deduplication
     const active = this.inFlight.get(photoId);
     if (active) return active;
 
     const requestPromise = (async () => {
       try {
+        // 5. Check persistent disk CacheStorage first (works offline & even after 7-day Google session limit)
+        const diskBlob = await getDiskCachedBlob(photoId);
+        if (diskBlob) {
+          const blobUrl = URL.createObjectURL(diskBlob);
+          this.set(photoId, blobUrl);
+          this.failed.delete(photoId);
+          this.failureTimestamps.delete(photoId);
+          return blobUrl;
+        }
+
+        // 6. If recently marked failed on network, skip network retry for 60s
+        if (this.isFailed(photoId)) {
+          return null;
+        }
+
+        // 7. Fetch from Google CDN and persist to disk CacheStorage
         const blob = await fetchPhotoBlobBytes(photo, token || undefined, onAuthExpired);
         if (blob) {
+          await putDiskCachedBlob(photoId, blob);
           const blobUrl = URL.createObjectURL(blob);
           this.set(photoId, blobUrl);
           this.failed.delete(photoId);
+          this.failureTimestamps.delete(photoId);
           return blobUrl;
         } else {
           this.markFailed(photoId);
@@ -403,11 +475,6 @@ export function usePhotoCache(
             continue;
           }
 
-          // If failed recently, skip
-          if (photoMemoryCache.isFailed(photo.id)) {
-            continue;
-          }
-
           loadingIndicesRef.current.add(idx);
           setVersion((v) => v + 1);
 
@@ -434,6 +501,47 @@ export function usePhotoCache(
       abortQueueRef.current = true;
     };
   }, [photos, currentIndex, token, photosLength, getWindowIndices, onNeedBaseUrlRefresh]);
+
+  // Low-priority background disk archiver: gently caches remaining photos into CacheStorage on disk
+  // without holding them in RAM so photos remain permanently playable even after Google's 7-day picker limit
+  useEffect(() => {
+    if (photosLength === 0 || !token) return;
+    let cancelled = false;
+
+    const archiveRemainingToDisk = async () => {
+      // Wait 5s after mount/change so active slide window gets 100% network priority
+      await new Promise((r) => setTimeout(r, 5000));
+
+      for (let i = 0; i < photos.length; i++) {
+        if (cancelled) break;
+        const p = photos[i];
+        if (!p || !p.id || !p.baseUrl) continue;
+        if (p.url.startsWith('data:') || p.url.startsWith('blob:') || p.url.includes('unsplash.com')) continue;
+
+        const alreadyOnDisk = await hasDiskCachedBlob(p.id);
+        if (alreadyOnDisk) continue;
+
+        if (cancelled) break;
+        try {
+          const blob = await fetchPhotoBlobBytes(p, token);
+          if (blob && !cancelled) {
+            await putDiskCachedBlob(p.id, blob);
+          }
+        } catch {
+          // ignore
+        }
+
+        // Gentle 1.2s pause between background disk archives
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    };
+
+    archiveRemainingToDisk();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [photos, photosLength, token]);
 
   // Helper getters
   const getPhotoSrc = useCallback(

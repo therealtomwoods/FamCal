@@ -338,16 +338,16 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         </div>
       )}
 
-      {/* 7-Day Session Expiration Indicator */}
-      {isSessionExpired && (
+      {/* Session Expiration Indicator (only shown if session expired AND photo cannot be loaded from local disk cache) */}
+      {isSessionExpired && hasPhotoFailed(currentIndex) && !isPhotoReady(currentIndex) && (
         <div className="absolute top-3 left-3 z-30 pointer-events-auto">
           <button
             onClick={onOpenAlbumPicker}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg backdrop-blur-md transition animate-pulse"
-            title="Google limits picker sessions to 7 days. Tap here to renew your family photo selection."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg backdrop-blur-md transition"
+            title="Tap here to refresh your Google Photos selection."
           >
             <FolderOpen className="w-3.5 h-3.5" />
-            <span>Photos Expired (7d limit) • Tap to Renew</span>
+            <span>Refresh Google Photos Selection</span>
           </button>
         </div>
       )}

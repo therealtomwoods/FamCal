@@ -118,7 +118,8 @@ export const App: React.FC = () => {
   );
   const [isLaunchingPicker, setIsLaunchingPicker] = useState<boolean>(false);
   const [isPhotosSessionExpired, setIsPhotosSessionExpired] = useState<boolean>(() => {
-    return localStorage.getItem('famcal_picker_session_expired') === 'true';
+    localStorage.removeItem('famcal_picker_session_expired');
+    return false;
   });
 
   // Widgets Data

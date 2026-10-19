@@ -156,6 +156,13 @@ export function clearStoredPickedPhotos(token?: string | null): void {
       // ignore
     }
   }
+  if (typeof caches !== 'undefined') {
+    try {
+      caches.delete('famcal-photo-blobs-v1').catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**
@@ -393,16 +400,15 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
  * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}&pageSize=100&pageToken={token}
  */
 export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
-  // Google Photos Picker API query param 'sessionId' expects the raw ID (strip sessions/ prefix)
+  // Google Photos Picker API query param 'sessionId' always expects the raw UUID (strip sessions/ prefix)
   const cleanId = sessionId.replace(/^sessions\//, '');
   const allRawItems: PickerMediaItem[] = [];
   let pageToken: string | undefined = undefined;
-  let idToTry = cleanId;
 
   while (true) {
     const baseUrlStr = 'https://photospicker.googleapis.com/v1/mediaItems';
     const params = new URLSearchParams();
-    params.set('sessionId', idToTry);
+    params.set('sessionId', cleanId);
     params.set('pageSize', '100');
     if (pageToken) {
       params.set('pageToken', pageToken);
@@ -416,18 +422,12 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
       });
 
       if (!res.ok) {
-        // If cleanId failed on very first request, try with sessions/ prefix as fallback
-        if (allRawItems.length === 0 && idToTry === cleanId) {
-          const sessionPath = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
-          idToTry = sessionPath;
-          continue;
-        }
         const errText = await res.text();
         console.warn(`Picker mediaItems fetch error (status ${res.status}):`, errText);
-        if (res.status === 401) {
+        if (res.status === 401 || res.status === 403) {
           throw new Error('UNAUTHORIZED_TOKEN_EXPIRED');
         }
-        if (res.status === 404 || res.status === 400 || res.status === 410) {
+        if (res.status === 404 || res.status === 410 || res.status === 400) {
           throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
         }
         break;
@@ -476,7 +476,7 @@ export async function deletePickerSession(token: string, sessionId: string): Pro
 /**
  * Processes selected photos with immediate fast playback:
  * 1. Saves all raw photo metadata immediately so all photos (hundreds) are recognized and playable.
- * 2. Immediately saves to IndexedDB and localStorage with fresh fetch timestamp.
+ * 2. Immediately saves to localStorage with fresh fetch timestamp.
  * 3. Notifies callers so the active slideshow UI updates seamlessly without freezing.
  */
 async function processAndStreamPickedPhotos(
@@ -513,7 +513,7 @@ export async function refreshPhotoUrls(
     currentAlbumId === 'PICKED_GOOGLE_PHOTOS' ||
     currentAlbumId === 'ALL_LIBRARY_PHOTOS';
 
-  // 1. Refresh from active picker session (valid for 7 days)
+  // 1. Refresh from active picker session (valid for up to 7 days on Google's servers)
   if (pickerSessionId && isPickedAlbum) {
     try {
       const cleanId = pickerSessionId.replace(/^sessions\//, '');
@@ -523,7 +523,7 @@ export async function refreshPhotoUrls(
       try {
         freshPhotos = await fetchPickerSelectedMediaItems(activeToken, cleanId);
       } catch (firstErr: any) {
-        // If OAuth token expired (401), attempt silent renewal once and retry
+        // If OAuth token expired (401/403), attempt silent renewal once and retry
         if (firstErr?.message?.includes('UNAUTHORIZED') && clientId) {
           console.log('Picker returned 401 Unauthorized. Attempting silent token renewal...');
           const { requestSilentTokenRefresh } = await import('./googleAuth');
@@ -560,13 +560,13 @@ export async function refreshPhotoUrls(
       }
     } catch (err: any) {
       console.warn('Failed to refresh picker photos from session:', err);
+      // Throttle next check by updating timestamp so we don't retry every 60s
+      localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
       if (
         err?.message?.includes('PICKER_SESSION_EXPIRED') ||
         err?.message?.includes('404') ||
-        err?.message?.includes('400') ||
         err?.message?.includes('410')
       ) {
-        localStorage.setItem('famcal_picker_session_expired', 'true');
         return { success: false, photos: [], sessionExpired: true };
       }
       if (err?.message?.includes('UNAUTHORIZED')) {
