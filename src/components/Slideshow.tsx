@@ -287,7 +287,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   return (
     <div
-      className="relative w-full h-full min-h-[200px] overflow-hidden select-none bg-black group"
+      className="relative w-full h-full overflow-hidden select-none bg-black group"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -308,15 +308,24 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         return (
           <div
             key={photo.id || idx}
-            className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
+            className={`absolute inset-0 w-full h-full overflow-hidden flex items-center justify-center transition-opacity duration-1000 ease-in-out ${
               isActive ? 'opacity-100 z-[1]' : 'opacity-0 pointer-events-none z-0'
             }`}
           >
+            {/* Ambient blurred backdrop to softly fill letterbox/pillarbox space */}
+            <img
+              src={displaySrc}
+              alt=""
+              aria-hidden="true"
+              referrerPolicy="no-referrer"
+              className="absolute inset-0 w-full h-full object-cover object-center blur-2xl scale-110 opacity-35 pointer-events-none"
+            />
+            {/* Full photo scaled proportionally to fit completely inside the container */}
             <img
               src={displaySrc}
               alt={photo.caption && !isFileName(photo.caption, photo.filename) ? photo.caption : 'Family photo'}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-cover object-center"
+              className="relative z-[1] w-full h-full max-w-full max-h-full object-contain object-center"
               loading={isCurrent ? 'eager' : 'lazy'}
               onLoad={() => {
                 if (rawSrc) {
@@ -353,10 +362,10 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       )}
 
       {/* Subtle top vignette for readability */}
-      <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/70 via-black/30 to-transparent pointer-events-none" />
+      <div className="absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-black/60 via-black/20 to-transparent pointer-events-none z-[2]" />
 
-      {/* Bottom gradient scrim blending into the middle / calendar section */}
-      <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-slate-950 via-slate-950/70 to-transparent pointer-events-none" />
+      {/* Subtle bottom gradient scrim blending into the middle / calendar section */}
+      <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-slate-950/90 via-slate-950/30 to-transparent pointer-events-none z-[2]" />
 
       {/* Controls on hover or touch */}
       {photosCount > 1 && (

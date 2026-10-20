@@ -700,7 +700,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="w-full h-full min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
+    <div className="w-full h-screen max-h-screen bg-slate-950 text-slate-100 flex items-center justify-center font-sans overflow-hidden">
       {/* Floating Kiosk Fullscreen Recovery Pill */}
       {isKioskFsPreferred && !isCurrentFullscreen && !dismissedRestorePrompt && (
         <div
@@ -727,12 +727,12 @@ export const App: React.FC = () => {
 
       {/* Aspect Display Container (Vertical 9:16 or Horizontal 16:9/Widescreen) */}
       <div
-        className={`w-full h-full flex flex-col transition-all duration-300 ${
+        className={`w-full flex flex-col overflow-hidden transition-all duration-300 ${
           settings.isKioskFramed
             ? isHorizontal
-              ? 'max-w-[1400px] h-[98vh] max-h-[920px] aspect-[16/9] rounded-3xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
-              : 'max-w-[480px] h-[98vh] max-h-[1050px] aspect-[9/16] rounded-3xl overflow-hidden shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
-            : 'max-w-none'
+              ? 'max-w-[1400px] h-[98vh] max-h-[920px] aspect-[16/9] rounded-3xl shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
+              : 'max-w-[480px] h-[98vh] max-h-[1050px] aspect-[9/16] rounded-3xl shadow-[0_0_60px_rgba(0,0,0,0.9)] border-4 border-slate-800/80 ring-1 ring-white/10'
+            : 'h-screen max-h-screen max-w-none'
         }`}
       >
         {/* ========================================================= */}
@@ -741,7 +741,7 @@ export const App: React.FC = () => {
         {/* ========================================================= */}
         <div
           className={`relative w-full ${
-            isHorizontal ? 'h-[30%] min-h-[160px] max-h-[250px]' : 'h-[45%]'
+            isHorizontal ? 'h-[30%] min-h-[160px] max-h-[250px]' : 'h-[45%] max-h-[45vh]'
           } flex-shrink-0 overflow-hidden bg-black transition-all duration-300`}
         >
           <Slideshow

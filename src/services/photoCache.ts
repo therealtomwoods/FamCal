@@ -293,8 +293,8 @@ async function fetchPhotoBlobBytes(
   if (!baseUrl) return null;
 
   const cleanBase = baseUrl.split('=')[0];
-  // w1200-h800 provides crisp high-resolution while keeping file size ~150-250KB for fast transfer
-  const targetUrl = `${cleanBase}=w1200-h800`;
+  // w1600-h1600 scales proportionally inside a 1600x1600 bounding box without cropping portrait or landscape photos
+  const targetUrl = `${cleanBase}=w1600-h1600`;
 
   const headers: Record<string, string> = {};
   if (token) {
