@@ -410,10 +410,16 @@ export function usePhotoCache(
 ): PhotoCacheHookResult {
   const [, setVersion] = useState(0);
   const loadingIndicesRef = useRef<Set<number>>(new Set());
-  const abortQueueRef = useRef<boolean>(false);
-  const queueRunningRef = useRef<boolean>(false);
+  const queueRunIdRef = useRef<number>(0);
 
   const photosLength = photos?.length || 0;
+
+  // Clear transient failure markers whenever token or photo list updates
+  useEffect(() => {
+    if (token || photosLength > 0) {
+      photoMemoryCache.clearFailed();
+    }
+  }, [token, photos]);
 
   // Window configuration: current + 4 ahead + 1 behind = 6 protected images
   const AHEAD_COUNT = 4;
@@ -444,7 +450,7 @@ export function usePhotoCache(
   useEffect(() => {
     if (photosLength === 0) return;
 
-    abortQueueRef.current = false;
+    const currentRunId = ++queueRunIdRef.current;
     const windowIndices = getWindowIndices(currentIndex);
     const protectedIds = new Set(
       windowIndices.map((idx) => photos[idx]?.id).filter(Boolean) as string[]
@@ -455,50 +461,48 @@ export function usePhotoCache(
 
     // Sequential background download of uncached items in priority order
     const runSequentialQueue = async () => {
-      if (queueRunningRef.current) return;
-      queueRunningRef.current = true;
+      for (const idx of windowIndices) {
+        if (queueRunIdRef.current !== currentRunId) break;
 
-      try {
-        for (const idx of windowIndices) {
-          if (abortQueueRef.current) break;
+        const photo = photos[idx];
+        if (!photo) continue;
 
-          const photo = photos[idx];
-          if (!photo) continue;
+        // If already cached or public, skip
+        if (photoMemoryCache.has(photo.id) || photo.url.startsWith('data:') || photo.url.startsWith('blob:')) {
+          continue;
+        }
 
-          // If already cached or public, skip
-          if (photoMemoryCache.has(photo.id) || photo.url.startsWith('data:') || photo.url.startsWith('blob:')) {
-            continue;
-          }
+        // If public demo URL, skip downloading
+        if (!photo.baseUrl && photo.url && photo.url.includes('unsplash.com')) {
+          continue;
+        }
 
-          // If public demo URL, skip downloading
-          if (!photo.baseUrl && photo.url && photo.url.includes('unsplash.com')) {
-            continue;
-          }
+        loadingIndicesRef.current.add(idx);
 
-          loadingIndicesRef.current.add(idx);
-          setVersion((v) => v + 1);
-
-          try {
-            await photoMemoryCache.loadPhoto(photo, token, onNeedBaseUrlRefresh);
-          } catch {
-            // ignore
-          } finally {
-            loadingIndicesRef.current.delete(idx);
+        try {
+          const loadedUrl = await photoMemoryCache.loadPhoto(photo, token, onNeedBaseUrlRefresh);
+          if (queueRunIdRef.current === currentRunId && (loadedUrl || idx === currentIndex)) {
             setVersion((v) => v + 1);
           }
-
-          // Small 40ms pause between sequential fetches so network & UI stay completely smooth
-          await new Promise((resolve) => setTimeout(resolve, 40));
+        } catch {
+          // ignore
+        } finally {
+          loadingIndicesRef.current.delete(idx);
         }
-      } finally {
-        queueRunningRef.current = false;
+
+        if (queueRunIdRef.current !== currentRunId) break;
+
+        // Small 40ms pause between sequential fetches so network & UI stay completely smooth
+        await new Promise((resolve) => setTimeout(resolve, 40));
       }
     };
 
     runSequentialQueue();
 
     return () => {
-      abortQueueRef.current = true;
+      if (queueRunIdRef.current === currentRunId) {
+        queueRunIdRef.current++;
+      }
     };
   }, [photos, currentIndex, token, photosLength, getWindowIndices, onNeedBaseUrlRefresh]);
 

@@ -108,10 +108,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   randomOrder = true,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [targetIndex, setTargetIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [shuffleVersion, setShuffleVersion] = useState(0);
-  const lastWorkingSrcRef = useRef<string | null>(null);
+  const lastWorkingPhotoRef = useRef<{ src: string; photo: PhotoItem } | null>(null);
 
   // Shuffled photo IDs reference to preserve consistent sequence across background baseUrl refreshes
   const shuffledIdsRef = useRef<string[]>([]);
@@ -151,41 +152,91 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const photosCount = displayPhotos?.length || 0;
 
-  // In-memory sliding-window cache hook:
-  // Sequentially caches upcoming photos in the background (a few at a time).
-  // Zero database overhead, instant slide transitions, auto-evicts old blobs.
+  // In-memory sliding-window cache hook centered on targetIndex:
+  // Sequentially caches targetIndex + upcoming photos silently in the background.
   const {
     getPhotoSrc,
     isPhotoReady,
     isPhotoLoading,
     hasPhotoFailed,
-  } = usePhotoCache(displayPhotos, currentIndex, userToken, onPhotosNeedRefresh);
+  } = usePhotoCache(displayPhotos, targetIndex, userToken, onPhotosNeedRefresh);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  const transitionTo = useCallback((nextIdx: number) => {
+  const targetIndexRef = useRef(targetIndex);
+  targetIndexRef.current = targetIndex;
+
+  const isPhotoReadyRef = useRef(isPhotoReady);
+  isPhotoReadyRef.current = isPhotoReady;
+
+  const commitTransition = useCallback((nextIdx: number) => {
     const current = currentIndexRef.current;
     if (current !== nextIdx) {
       setPreviousIndex(current);
       setCurrentIndex(nextIdx);
     }
+    setTargetIndex(nextIdx);
   }, []);
 
-  // Automatic photo rotation that cannot stall
+  const requestSlideChange = useCallback(
+    (nextIdx: number) => {
+      if (photosCount <= 1) return;
+      if (isPhotoReadyRef.current(nextIdx)) {
+        commitTransition(nextIdx);
+      } else {
+        // Prepare nextIdx in the background while keeping the current photo & date tag steady on screen
+        setTargetIndex(nextIdx);
+      }
+    },
+    [photosCount, commitTransition]
+  );
+
+  // Automatic photo rotation: each displayed photo remains on screen for a full intervalSeconds
+  // before requesting the next slide (which transitions only once cached in memory).
   useEffect(() => {
     if (photosCount <= 1) return;
 
     const intervalMs = Math.max(3, intervalSeconds) * 1000;
-    const timer = setInterval(() => {
-      const current = currentIndexRef.current;
-      const next = (current + 1) % photosCount;
-      setPreviousIndex(current);
-      setCurrentIndex(next);
+    const timer = setTimeout(() => {
+      const next = (currentIndexRef.current + 1) % photosCount;
+      if (isPhotoReadyRef.current(next)) {
+        commitTransition(next);
+      } else {
+        setTargetIndex(next);
+      }
     }, intervalMs);
 
-    return () => clearInterval(timer);
-  }, [photosCount, intervalSeconds]);
+    return () => clearTimeout(timer);
+  }, [currentIndex, photosCount, intervalSeconds, commitTransition]);
+
+  // Background readiness watcher:
+  // As soon as a requested targetIndex finishes caching in the background, transition cleanly to it.
+  // If targetIndex failed in the background, silently step targetIndex to the next candidate without
+  // changing the displayed photo or flipping the bottom-right date tag.
+  useEffect(() => {
+    if (photosCount === 0) return;
+
+    if (targetIndex !== currentIndex) {
+      if (isPhotoReady(targetIndex)) {
+        commitTransition(targetIndex);
+      } else if (hasPhotoFailed(targetIndex) && photosCount > 1) {
+        const nextCandidate = (targetIndex + 1) % photosCount;
+        if (nextCandidate !== currentIndex) {
+          const timer = setTimeout(() => {
+            setTargetIndex(nextCandidate);
+          }, 300);
+          return () => clearTimeout(timer);
+        }
+      }
+    } else if (!isPhotoReady(currentIndex) && hasPhotoFailed(currentIndex) && photosCount > 1) {
+      // Initial cold start if index 0 failed: silently advance targetIndex in background
+      const timer = setTimeout(() => {
+        setTargetIndex((currentIndex + 1) % photosCount);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [targetIndex, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, commitTransition]);
 
   // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
   useEffect(() => {
@@ -209,39 +260,38 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   // Bounds safety check
   useEffect(() => {
-    if (currentIndex >= photosCount && photosCount > 0) {
-      setCurrentIndex(0);
+    if (photosCount > 0) {
+      if (currentIndex >= photosCount) setCurrentIndex(0);
+      if (targetIndex >= photosCount) setTargetIndex(0);
     }
-  }, [photosCount, currentIndex]);
+  }, [photosCount, currentIndex, targetIndex]);
 
-  // If the active photo permanently failed to load, automatically advance to next after 1.5s
+  // Keep last working photo & its exact metadata paired together
+  const currentRawSrc = getPhotoSrc(currentIndex);
+  const currentCandidatePhoto = displayPhotos?.[currentIndex];
+
   useEffect(() => {
-    if (hasPhotoFailed(currentIndex) && photosCount > 1) {
-      const timer = setTimeout(() => {
-        transitionTo((currentIndex + 1) % photosCount);
-      }, 1500);
-      return () => clearTimeout(timer);
+    if (currentRawSrc && currentCandidatePhoto) {
+      lastWorkingPhotoRef.current = {
+        src: currentRawSrc,
+        photo: currentCandidatePhoto,
+      };
     }
-  }, [currentIndex, hasPhotoFailed, photosCount, transitionTo]);
+  }, [currentRawSrc, currentCandidatePhoto]);
 
-  // Keep last working image updated
-  const currentSrc = getPhotoSrc(currentIndex);
-  useEffect(() => {
-    if (currentSrc) {
-      lastWorkingSrcRef.current = currentSrc;
-    }
-  }, [currentSrc]);
-
-  const currentPhoto = displayPhotos?.[currentIndex];
+  // Strictly pair the displayed metadata (caption + bottom-right date tag) with the exact photo shown on screen
+  const displayedPhoto = currentRawSrc
+    ? currentCandidatePhoto
+    : lastWorkingPhotoRef.current?.photo ?? null;
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    transitionTo((currentIndex - 1 + photosCount) % photosCount);
+    requestSlideChange((currentIndex - 1 + photosCount) % photosCount);
   };
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    transitionTo((currentIndex + 1) % photosCount);
+    requestSlideChange((currentIndex + 1) % photosCount);
   };
 
   const handleReshuffle = (e: React.MouseEvent) => {
@@ -251,6 +301,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       shuffledIdsRef.current = shuffled.map((p) => p.id);
       setShuffleVersion((v) => v + 1);
       setCurrentIndex(0);
+      setTargetIndex(0);
       setPreviousIndex(null);
     }
   };
@@ -283,7 +334,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     visibleIndices.push(nextIdx);
   }
 
-  const isCurrentLoading = !isPhotoReady(currentIndex) && isPhotoLoading(currentIndex);
+  // Only show initial loading indicator if no family photo has ever been rendered yet
+  const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(targetIndex);
 
   return (
     <div
@@ -300,8 +352,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         const isActive = isCurrent;
         const rawSrc = getPhotoSrc(idx);
 
-        // If active slide's blob isn't loaded yet, fall back to last working image or reliable family fallback
-        const displaySrc = rawSrc || (isCurrent ? lastWorkingSrcRef.current || RELIABLE_FALLBACKS[idx % RELIABLE_FALLBACKS.length] : undefined);
+        // If active slide's blob isn't loaded yet, stay on last working photo or single calm fallback
+        const displaySrc =
+          rawSrc ||
+          (isCurrent
+            ? lastWorkingPhotoRef.current?.src || RELIABLE_FALLBACKS[0]
+            : undefined);
 
         if (!displaySrc) return null;
 
@@ -328,8 +384,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               className="relative z-[1] w-full h-full max-w-full max-h-full object-contain object-center"
               loading={isCurrent ? 'eager' : 'lazy'}
               onLoad={() => {
-                if (rawSrc) {
-                  lastWorkingSrcRef.current = rawSrc;
+                if (rawSrc && photo) {
+                  lastWorkingPhotoRef.current = { src: rawSrc, photo };
                 }
               }}
             />
@@ -337,18 +393,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         );
       })}
 
-      {/* Non-intrusive background caching pill (shows briefly only when downloading active slide) */}
-      {isCurrentLoading && (
+      {/* Initial cold-start indicator (hidden once the first photo is displayed; all further caching is silent) */}
+      {isInitialColdLoad && (
         <div className="absolute bottom-12 right-4 z-10 pointer-events-none transition-opacity duration-500">
           <span className="text-[10px] text-blue-200 bg-black/60 backdrop-blur-sm px-2.5 py-0.5 rounded-full border border-blue-400/30 flex items-center gap-1.5 shadow-sm">
             <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
-            Caching photos...
+            Loading photos...
           </span>
         </div>
       )}
 
-      {/* Session Expiration Indicator (only shown if session expired AND photo cannot be loaded from local disk cache) */}
-      {isSessionExpired && hasPhotoFailed(currentIndex) && !isPhotoReady(currentIndex) && (
+      {/* Session Expiration Indicator (only shown if session expired AND no photo can be loaded from local disk cache) */}
+      {isSessionExpired && hasPhotoFailed(targetIndex) && !isPhotoReady(currentIndex) && !lastWorkingPhotoRef.current && (
         <div className="absolute top-3 left-3 z-30 pointer-events-auto">
           <button
             onClick={onOpenAlbumPicker}
@@ -406,24 +462,24 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       )}
 
       {/* Bottom Photo Metadata: Caption on Left, Small Date Tag in Bottom-Right Corner */}
-      {currentPhoto && (
+      {displayedPhoto && (
         <div className="absolute bottom-3 left-4 right-4 z-20 pointer-events-none flex items-end justify-between gap-3">
           {/* Caption on Left */}
           <div className="flex-1 min-w-0">
-            {currentPhoto.caption && !isFileName(currentPhoto.caption, currentPhoto.filename) && (
+            {displayedPhoto.caption && !isFileName(displayedPhoto.caption, displayedPhoto.filename) && (
               <p className="text-xs sm:text-sm font-medium text-white/95 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] line-clamp-1">
-                {currentPhoto.caption}
+                {displayedPhoto.caption}
               </p>
             )}
           </div>
 
-          {/* Small Tag in Bottom-Right Corner with the Date of the Photo */}
-          {formatPhotoDate(currentPhoto) && (
+          {/* Small Tag in Bottom-Right Corner with the Date of the Currently Displayed Photo */}
+          {formatPhotoDate(displayedPhoto) && (
             <div className="flex-shrink-0">
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/65 backdrop-blur-md border border-white/20 text-white shadow-[0_2px_8px_rgba(0,0,0,0.8)]">
                 <Calendar className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
                 <span className="text-[11px] sm:text-xs font-semibold tracking-wide text-slate-100 drop-shadow">
-                  {formatPhotoDate(currentPhoto)}
+                  {formatPhotoDate(displayedPhoto)}
                 </span>
               </div>
             </div>
