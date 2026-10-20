@@ -108,11 +108,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   randomOrder = true,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [targetIndex, setTargetIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [shuffleVersion, setShuffleVersion] = useState(0);
   const lastWorkingPhotoRef = useRef<{ src: string; photo: PhotoItem } | null>(null);
+  const waitingForNextRef = useRef<boolean>(false);
 
   // Shuffled photo IDs reference to preserve consistent sequence across background baseUrl refreshes
   const shuffledIdsRef = useRef<string[]>([]);
@@ -152,91 +152,95 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const photosCount = displayPhotos?.length || 0;
 
-  // In-memory sliding-window cache hook centered on targetIndex:
-  // Sequentially caches targetIndex + upcoming photos silently in the background.
+  // In-memory sliding-window cache hook:
+  // Silently pre-caches currentIndex + up to 4 working photos ahead in the background.
   const {
     getPhotoSrc,
     isPhotoReady,
     isPhotoLoading,
     hasPhotoFailed,
-  } = usePhotoCache(displayPhotos, targetIndex, userToken, onPhotosNeedRefresh);
+    cachedCount,
+    cacheVersion,
+  } = usePhotoCache(displayPhotos, currentIndex, userToken, onPhotosNeedRefresh);
 
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  const targetIndexRef = useRef(targetIndex);
-  targetIndexRef.current = targetIndex;
+  // Find the next photo after fromIndex that is already cached and ready in memory
+  const findNextReadyIndex = useCallback(
+    (fromIndex: number): number | null => {
+      if (photosCount <= 1) return null;
+      for (let offset = 1; offset < photosCount; offset++) {
+        const idx = (fromIndex + offset) % photosCount;
+        if (isPhotoReady(idx)) {
+          return idx;
+        }
+      }
+      return null;
+    },
+    [photosCount, isPhotoReady]
+  );
 
-  const isPhotoReadyRef = useRef(isPhotoReady);
-  isPhotoReadyRef.current = isPhotoReady;
+  const findPrevReadyIndex = useCallback(
+    (fromIndex: number): number | null => {
+      if (photosCount <= 1) return null;
+      for (let offset = 1; offset < photosCount; offset++) {
+        const idx = (fromIndex - offset + photosCount) % photosCount;
+        if (isPhotoReady(idx)) {
+          return idx;
+        }
+      }
+      return null;
+    },
+    [photosCount, isPhotoReady]
+  );
+
+  const findNextReadyIndexRef = useRef(findNextReadyIndex);
+  findNextReadyIndexRef.current = findNextReadyIndex;
 
   const commitTransition = useCallback((nextIdx: number) => {
     const current = currentIndexRef.current;
+    waitingForNextRef.current = false;
     if (current !== nextIdx) {
       setPreviousIndex(current);
       setCurrentIndex(nextIdx);
     }
-    setTargetIndex(nextIdx);
   }, []);
 
-  const requestSlideChange = useCallback(
-    (nextIdx: number) => {
-      if (photosCount <= 1) return;
-      if (isPhotoReadyRef.current(nextIdx)) {
-        commitTransition(nextIdx);
-      } else {
-        // Prepare nextIdx in the background while keeping the current photo & date tag steady on screen
-        setTargetIndex(nextIdx);
-      }
-    },
-    [photosCount, commitTransition]
-  );
-
-  // Automatic photo rotation: each displayed photo remains on screen for a full intervalSeconds
-  // before requesting the next slide (which transitions only once cached in memory).
+  // Automatic photo rotation every intervalSeconds (e.g. 15s):
+  // Transitions immediately to the next ready cached photo, or sets waitingForNextRef
+  // so it transitions the instant the next background photo finishes downloading.
   useEffect(() => {
     if (photosCount <= 1) return;
 
     const intervalMs = Math.max(3, intervalSeconds) * 1000;
-    const timer = setTimeout(() => {
-      const next = (currentIndexRef.current + 1) % photosCount;
-      if (isPhotoReadyRef.current(next)) {
-        commitTransition(next);
+    const timer = setInterval(() => {
+      const nextReady = findNextReadyIndexRef.current(currentIndexRef.current);
+      if (nextReady !== null) {
+        commitTransition(nextReady);
       } else {
-        setTargetIndex(next);
+        waitingForNextRef.current = true;
       }
     }, intervalMs);
 
-    return () => clearTimeout(timer);
+    return () => clearInterval(timer);
   }, [currentIndex, photosCount, intervalSeconds, commitTransition]);
 
-  // Background readiness watcher:
-  // As soon as a requested targetIndex finishes caching in the background, transition cleanly to it.
-  // If targetIndex failed in the background, silently step targetIndex to the next candidate without
-  // changing the displayed photo or flipping the bottom-right date tag.
+  // Reactive cache watcher:
+  // Triggered whenever cacheVersion updates (a background photo finished loading or failed).
+  // If the rotation timer is waiting for the next slide (or if cold start slide 0 failed),
+  // immediately transition as soon as a ready photo is available in cache.
   useEffect(() => {
-    if (photosCount === 0) return;
+    if (photosCount <= 1) return;
 
-    if (targetIndex !== currentIndex) {
-      if (isPhotoReady(targetIndex)) {
-        commitTransition(targetIndex);
-      } else if (hasPhotoFailed(targetIndex) && photosCount > 1) {
-        const nextCandidate = (targetIndex + 1) % photosCount;
-        if (nextCandidate !== currentIndex) {
-          const timer = setTimeout(() => {
-            setTargetIndex(nextCandidate);
-          }, 300);
-          return () => clearTimeout(timer);
-        }
+    const currentReady = isPhotoReady(currentIndex);
+    if (waitingForNextRef.current || (!currentReady && hasPhotoFailed(currentIndex))) {
+      const nextReady = findNextReadyIndex(currentIndex);
+      if (nextReady !== null) {
+        commitTransition(nextReady);
       }
-    } else if (!isPhotoReady(currentIndex) && hasPhotoFailed(currentIndex) && photosCount > 1) {
-      // Initial cold start if index 0 failed: silently advance targetIndex in background
-      const timer = setTimeout(() => {
-        setTargetIndex((currentIndex + 1) % photosCount);
-      }, 300);
-      return () => clearTimeout(timer);
     }
-  }, [targetIndex, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, commitTransition]);
+  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, findNextReadyIndex, commitTransition]);
 
   // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
   useEffect(() => {
@@ -260,11 +264,10 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   // Bounds safety check
   useEffect(() => {
-    if (photosCount > 0) {
-      if (currentIndex >= photosCount) setCurrentIndex(0);
-      if (targetIndex >= photosCount) setTargetIndex(0);
+    if (photosCount > 0 && currentIndex >= photosCount) {
+      setCurrentIndex(0);
     }
-  }, [photosCount, currentIndex, targetIndex]);
+  }, [photosCount, currentIndex]);
 
   // Keep last working photo & its exact metadata paired together
   const currentRawSrc = getPhotoSrc(currentIndex);
@@ -286,12 +289,20 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    requestSlideChange((currentIndex - 1 + photosCount) % photosCount);
+    const prevReady = findPrevReadyIndex(currentIndex);
+    if (prevReady !== null) {
+      commitTransition(prevReady);
+    }
   };
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    requestSlideChange((currentIndex + 1) % photosCount);
+    const nextReady = findNextReadyIndex(currentIndex);
+    if (nextReady !== null) {
+      commitTransition(nextReady);
+    } else {
+      waitingForNextRef.current = true;
+    }
   };
 
   const handleReshuffle = (e: React.MouseEvent) => {
@@ -300,8 +311,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       const shuffled = shuffleArray(photos);
       shuffledIdsRef.current = shuffled.map((p) => p.id);
       setShuffleVersion((v) => v + 1);
+      waitingForNextRef.current = false;
       setCurrentIndex(0);
-      setTargetIndex(0);
       setPreviousIndex(null);
     }
   };
@@ -324,18 +335,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     );
   }
 
-  // Virtualized slide window: only mount active, previous (during crossfade), and next (preloading)
+  // Virtualized slide window: mount active, previous (during crossfade), and next ready slide
   const visibleIndices: number[] = [currentIndex];
   if (previousIndex !== null && previousIndex !== currentIndex) {
     visibleIndices.push(previousIndex);
   }
-  const nextIdx = (currentIndex + 1) % photosCount;
-  if (nextIdx !== currentIndex && !visibleIndices.includes(nextIdx)) {
-    visibleIndices.push(nextIdx);
+  const nextReadyIdx = findNextReadyIndex(currentIndex) ?? ((currentIndex + 1) % photosCount);
+  if (nextReadyIdx !== currentIndex && !visibleIndices.includes(nextReadyIdx)) {
+    visibleIndices.push(nextReadyIdx);
   }
 
   // Only show initial loading indicator if no family photo has ever been rendered yet
-  const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(targetIndex);
+  const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(currentIndex);
 
   return (
     <div
@@ -403,8 +414,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         </div>
       )}
 
-      {/* Session Expiration Indicator (only shown if session expired AND no photo can be loaded from local disk cache) */}
-      {isSessionExpired && hasPhotoFailed(targetIndex) && !isPhotoReady(currentIndex) && !lastWorkingPhotoRef.current && (
+      {/* Session Expiration Indicator (shown if session expired AND upcoming photos cannot be loaded from local disk cache) */}
+      {isSessionExpired && cachedCount <= 1 && hasPhotoFailed((currentIndex + 1) % photosCount) && (
         <div className="absolute top-3 left-3 z-30 pointer-events-auto">
           <button
             onClick={onOpenAlbumPicker}

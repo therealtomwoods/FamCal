@@ -195,7 +195,7 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
  */
 export async function downloadPhotoBlob(baseUrl: string, token?: string): Promise<Blob | null> {
   const cleanBase = baseUrl.split('=')[0];
-  const targetUrl = `${cleanBase}=w1600-h1600`;
+  const targetUrl = `${cleanBase}=w1200-h800`;
 
   // 1. Try local proxy first (works in both Vite dev server and Pi-Kiosk server)
   try {
@@ -382,7 +382,7 @@ function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): Ph
 
       return {
         id: item.id,
-        url: `${baseUrl}=w1600-h1600`,
+        url: `${baseUrl}=w1200-h800`,
         baseUrl: baseUrl,
         filename: filename,
         caption: undefined,
