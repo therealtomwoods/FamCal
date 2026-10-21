@@ -8,10 +8,84 @@ interface CachedPhoto {
   lastAccessed: number;
 }
 
-const DISK_CACHE_NAME = 'famcal-photo-blobs-v1';
+const LEGACY_DISK_CACHE_NAME = 'famcal-photo-blobs-v1';
+const DISK_CACHE_NAME = 'famcal-photo-blobs-v2';
+
+// Clean up legacy v1 cache that may contain non-image fallback responses
+if (typeof caches !== 'undefined') {
+  caches.delete(LEGACY_DISK_CACHE_NAME).catch(() => {});
+}
 
 function getDiskCacheUrl(photoId: string): string {
   return `https://famcal-cache.local/photo/${encodeURIComponent(photoId)}`;
+}
+
+/**
+ * Inspects the first 12 bytes of a Blob to verify it is a genuine binary image
+ * (JPEG, PNG, GIF, WebP, BMP, AVIF/HEIC) and never an HTML or JSON error page.
+ */
+export async function isValidImageBlob(blob: Blob | null | undefined): Promise<boolean> {
+  if (!blob || blob.size <= 200) return false;
+  try {
+    const buf = await blob.slice(0, 12).arrayBuffer();
+    const b = new Uint8Array(buf);
+    if (b.length < 4) return false;
+
+    // JPEG: FF D8 FF
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;
+    // PNG: 89 50 4E 47
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true;
+    // GIF: 47 49 46 38
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return true;
+    // WebP: RIFF....WEBP
+    if (
+      b.length >= 12 &&
+      b[0] === 0x52 &&
+      b[1] === 0x49 &&
+      b[2] === 0x46 &&
+      b[3] === 0x46 &&
+      b[8] === 0x57 &&
+      b[9] === 0x45 &&
+      b[10] === 0x42 &&
+      b[11] === 0x50
+    ) {
+      return true;
+    }
+    // BMP: 42 4D
+    if (b[0] === 0x42 && b[1] === 0x4d) return true;
+    // ISO Base Media File Format (AVIF / HEIC): ....ftyp
+    if (b.length >= 8 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verifies that the browser can actually decode and render the image URL with non-zero dimensions.
+ */
+export function verifyImageDecodes(url: string, timeoutMs = 6000): Promise<boolean> {
+  if (typeof window === 'undefined' || !url) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const img = new window.Image();
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => finish(img.naturalWidth > 0 && img.naturalHeight > 0);
+    img.onerror = () => finish(false);
+    img.src = url;
+  });
 }
 
 export async function getDiskCachedBlob(photoId: string): Promise<Blob | null> {
@@ -21,7 +95,7 @@ export async function getDiskCachedBlob(photoId: string): Promise<Blob | null> {
     const res = await cache.match(getDiskCacheUrl(photoId));
     if (res && res.ok) {
       const blob = await res.blob();
-      if (blob && blob.size > 200 && (!blob.type || blob.type.startsWith('image/'))) {
+      if (await isValidImageBlob(blob)) {
         return blob;
       } else {
         await cache.delete(getDiskCacheUrl(photoId));
@@ -45,12 +119,12 @@ export async function hasDiskCachedBlob(photoId: string): Promise<boolean> {
 }
 
 export async function putDiskCachedBlob(photoId: string, blob: Blob): Promise<void> {
-  if (typeof caches === 'undefined' || !photoId || !blob || blob.size <= 200) return;
+  if (typeof caches === 'undefined' || !photoId || !(await isValidImageBlob(blob))) return;
   try {
     const cache = await caches.open(DISK_CACHE_NAME);
     const response = new Response(blob, {
       headers: {
-        'Content-Type': blob.type || 'image/jpeg',
+        'Content-Type': blob.type && blob.type.startsWith('image/') ? blob.type : 'image/jpeg',
         'Cache-Control': 'public, max-age=31536000',
       },
     });
@@ -60,25 +134,45 @@ export async function putDiskCachedBlob(photoId: string, blob: Blob): Promise<vo
   }
 }
 
+export async function deleteDiskCachedBlob(photoId: string): Promise<void> {
+  if (typeof caches === 'undefined' || !photoId) return;
+  try {
+    const cache = await caches.open(DISK_CACHE_NAME);
+    await cache.delete(getDiskCacheUrl(photoId));
+  } catch {
+    // ignore
+  }
+}
+
 export async function clearDiskPhotoCache(): Promise<void> {
   if (typeof caches === 'undefined') return;
   try {
+    await caches.delete(LEGACY_DISK_CACHE_NAME);
     await caches.delete(DISK_CACHE_NAME);
   } catch {
     // ignore
   }
 }
 
-// Global in-memory cache of active object URLs (keeps at most 10 object URLs in RAM)
+function safeRevokeBlobUrl(url?: string): void {
+  if (!url || !url.startsWith('blob:')) return;
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // ignore
+  }
+}
+
+// Global in-memory cache of active object URLs (keeps at most 12 object URLs in RAM)
 class PhotoMemoryCache {
   private cache = new Map<string, CachedPhoto>();
   private inFlight = new Map<string, Promise<string | null>>();
   private failed = new Set<string>();
   private failureTimestamps = new Map<string, number>();
-  private maxCacheEntries = 10; // Keep at most 10 images in Chrome memory (~2MB)
+  private maxCacheEntries = 12;
 
   /**
-   * Get cached blob URL for a photo if available
+   * Get cached blob/display URL for a photo if available
    */
   get(photoId: string): string | undefined {
     const entry = this.cache.get(photoId);
@@ -96,8 +190,8 @@ class PhotoMemoryCache {
   isFailed(photoId: string): boolean {
     const failedAt = this.failureTimestamps.get(photoId);
     if (!failedAt) return false;
-    // Allow retry after 60 seconds
-    if (Date.now() - failedAt > 60000) {
+    // Allow retry after 45 seconds
+    if (Date.now() - failedAt > 45000) {
       this.failed.delete(photoId);
       this.failureTimestamps.delete(photoId);
       return false;
@@ -108,6 +202,19 @@ class PhotoMemoryCache {
   markFailed(photoId: string): void {
     this.failed.add(photoId);
     this.failureTimestamps.set(photoId, Date.now());
+  }
+
+  /**
+   * Immediately invalidate a corrupted or expired entry from memory and disk
+   */
+  invalidate(photoId: string): void {
+    const existing = this.cache.get(photoId);
+    if (existing) {
+      safeRevokeBlobUrl(existing.blobUrl);
+      this.cache.delete(photoId);
+    }
+    this.markFailed(photoId);
+    deleteDiskCachedBlob(photoId).catch(() => {});
   }
 
   clearFailed(photoId?: string): void {
@@ -121,17 +228,13 @@ class PhotoMemoryCache {
   }
 
   /**
-   * Store a blob URL for a photo and evict older entries outside the protected set
+   * Store a verified URL for a photo. Only prunes if protectedIds is explicitly provided
+   * so active slides are never evicted mid-display.
    */
   set(photoId: string, blobUrl: string, protectedIds?: Set<string>): void {
-    // If already exists with different url, revoke old
     const existing = this.cache.get(photoId);
     if (existing && existing.blobUrl !== blobUrl) {
-      try {
-        URL.revokeObjectURL(existing.blobUrl);
-      } catch {
-        // ignore
-      }
+      safeRevokeBlobUrl(existing.blobUrl);
     }
 
     this.cache.set(photoId, {
@@ -141,7 +244,9 @@ class PhotoMemoryCache {
       lastAccessed: Date.now(),
     });
 
-    this.prune(protectedIds);
+    if (protectedIds) {
+      this.prune(protectedIds);
+    }
   }
 
   /**
@@ -150,7 +255,6 @@ class PhotoMemoryCache {
   prune(protectedIds?: Set<string>): void {
     if (this.cache.size <= this.maxCacheEntries) return;
 
-    // Collect candidates for eviction (not in protectedIds)
     const candidates: CachedPhoto[] = [];
     for (const [id, entry] of this.cache.entries()) {
       if (!protectedIds || !protectedIds.has(id)) {
@@ -158,18 +262,13 @@ class PhotoMemoryCache {
       }
     }
 
-    // Sort by lastAccessed ascending (oldest first)
     candidates.sort((a, b) => a.lastAccessed - b.lastAccessed);
 
     while (this.cache.size > this.maxCacheEntries && candidates.length > 0) {
       const victim = candidates.shift();
       if (!victim) break;
 
-      try {
-        URL.revokeObjectURL(victim.blobUrl);
-      } catch {
-        // ignore
-      }
+      safeRevokeBlobUrl(victim.blobUrl);
       this.cache.delete(victim.photoId);
     }
   }
@@ -180,11 +279,7 @@ class PhotoMemoryCache {
   evictExcept(keepIds: Set<string>): void {
     for (const [id, entry] of this.cache.entries()) {
       if (!keepIds.has(id)) {
-        try {
-          URL.revokeObjectURL(entry.blobUrl);
-        } catch {
-          // ignore
-        }
+        safeRevokeBlobUrl(entry.blobUrl);
         this.cache.delete(id);
       }
     }
@@ -195,11 +290,7 @@ class PhotoMemoryCache {
    */
   clearAll(): void {
     for (const entry of this.cache.values()) {
-      try {
-        URL.revokeObjectURL(entry.blobUrl);
-      } catch {
-        // ignore
-      }
+      safeRevokeBlobUrl(entry.blobUrl);
     }
     this.cache.clear();
     this.inFlight.clear();
@@ -208,7 +299,7 @@ class PhotoMemoryCache {
   }
 
   /**
-   * Load photo blob with deduplication (checks RAM -> persistent CacheStorage -> network)
+   * Load photo with strict verification (checks RAM -> persistent CacheStorage -> network blob -> direct <img> load)
    */
   async loadPhoto(
     photo: PhotoItem,
@@ -243,31 +334,59 @@ class PhotoMemoryCache {
         const diskBlob = await getDiskCachedBlob(photoId);
         if (diskBlob) {
           const blobUrl = URL.createObjectURL(diskBlob);
-          this.set(photoId, blobUrl);
-          this.failed.delete(photoId);
-          this.failureTimestamps.delete(photoId);
-          return blobUrl;
+          if (await verifyImageDecodes(blobUrl)) {
+            this.set(photoId, blobUrl);
+            this.failed.delete(photoId);
+            this.failureTimestamps.delete(photoId);
+            return blobUrl;
+          } else {
+            safeRevokeBlobUrl(blobUrl);
+            await deleteDiskCachedBlob(photoId);
+          }
         }
 
-        // 6. If recently marked failed on network, skip network retry for 60s
+        // 6. If recently marked failed on network, skip network retry for 45s
         if (this.isFailed(photoId)) {
           return null;
         }
 
-        // 7. Fetch from Google CDN and persist to disk CacheStorage
+        // 7. Fetch binary image from proxy / Google CDN and persist to disk CacheStorage
         const blob = await fetchPhotoBlobBytes(photo, token || undefined, onAuthExpired);
         if (blob) {
-          await putDiskCachedBlob(photoId, blob);
           const blobUrl = URL.createObjectURL(blob);
-          this.set(photoId, blobUrl);
-          this.failed.delete(photoId);
-          this.failureTimestamps.delete(photoId);
-          return blobUrl;
-        } else {
-          this.markFailed(photoId);
-          return null;
+          if (await verifyImageDecodes(blobUrl)) {
+            await putDiskCachedBlob(photoId, blob);
+            this.set(photoId, blobUrl);
+            this.failed.delete(photoId);
+            this.failureTimestamps.delete(photoId);
+            return blobUrl;
+          } else {
+            safeRevokeBlobUrl(blobUrl);
+          }
         }
-      } catch (err) {
+
+        // 8. Fallback for static hosts (e.g. GitHub Pages) or non-CORS environments:
+        // Test direct browser <img> loading without custom headers
+        const directBase = (photo.baseUrl || photo.url || '').split('=')[0];
+        if (directBase && directBase.startsWith('https://')) {
+          const directCandidates = [
+            `${directBase}=w1200-h800`,
+            photo.url && photo.url.startsWith('https://') ? photo.url : '',
+          ].filter(Boolean);
+
+          for (const candidateUrl of directCandidates) {
+            if (await verifyImageDecodes(candidateUrl, 5000)) {
+              this.set(photoId, candidateUrl);
+              this.failed.delete(photoId);
+              this.failureTimestamps.delete(photoId);
+              return candidateUrl;
+            }
+          }
+        }
+
+        this.markFailed(photoId);
+        return null;
+      } catch {
         this.markFailed(photoId);
         return null;
       } finally {
@@ -286,7 +405,8 @@ export const photoMemoryCache = new PhotoMemoryCache();
  * Low-level authenticated blob fetcher:
  * 1. Tries local proxy /api/photo with Authorization header
  * 2. Tries direct fetch with Authorization header and CORS
- * 3. Tries direct fetch with =d download parameter
+ * 3. Tries direct fetch without custom headers (avoids CORS preflight rejection on public signed baseUrls)
+ * 4. Tries direct fetch with =d download parameter
  */
 async function fetchPhotoBlobBytes(
   photo: PhotoItem,
@@ -320,7 +440,7 @@ async function fetchPhotoBlobBytes(
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.startsWith('image/')) {
       const blob = await res.blob();
-      if (blob.size > 200 && blob.type.startsWith('image/')) {
+      if (await isValidImageBlob(blob)) {
         return blob;
       }
     } else if (res.status === 401 || res.status === 403) {
@@ -347,7 +467,7 @@ async function fetchPhotoBlobBytes(
     const contentType = res.headers.get('content-type') || '';
     if (res.ok && contentType.startsWith('image/')) {
       const blob = await res.blob();
-      if (blob.size > 200 && blob.type.startsWith('image/')) {
+      if (await isValidImageBlob(blob)) {
         return blob;
       }
     }
@@ -355,54 +475,74 @@ async function fetchPhotoBlobBytes(
     // ignore
   }
 
-  if (proxyRejectedUpstream) {
-    return null;
+  // 2. Direct authenticated fetch (Google Photos Picker API allows direct GET with Bearer token)
+  if (!proxyRejectedUpstream && token) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+
+      const res = await fetch(targetUrl, {
+        headers,
+        referrerPolicy: 'no-referrer',
+        signal: ctrl.signal,
+      }).finally(() => clearTimeout(timer));
+
+      if (res.ok) {
+        const blob = await res.blob();
+        if (await isValidImageBlob(blob)) {
+          return blob;
+        }
+      } else if (res.status === 401 || res.status === 403) {
+        onAuthExpired?.();
+      }
+    } catch {
+      // Continue to simple credential-less fetch
+    }
   }
 
-  // 2. Direct authenticated fetch (Google Photos Picker API allows direct GET with Bearer token)
+  // 3. Simple GET fetch without custom headers (avoids CORS preflight failure on static hosts)
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const timer = setTimeout(() => ctrl.abort(), 4500);
 
     const res = await fetch(targetUrl, {
-      headers,
       referrerPolicy: 'no-referrer',
       signal: ctrl.signal,
     }).finally(() => clearTimeout(timer));
 
     if (res.ok) {
       const blob = await res.blob();
-      if (blob.size > 200 && blob.type.startsWith('image/')) {
+      if (await isValidImageBlob(blob)) {
         return blob;
       }
-    } else if (res.status === 401 || res.status === 403) {
-      onAuthExpired?.();
     }
   } catch {
     // Continue to download parameter fallback
   }
 
-  // 3. Direct fetch with =d (download parameter)
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
+  // 4. Direct fetch with =d (download parameter)
+  if (!proxyRejectedUpstream) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
 
-    const res = await fetch(`${cleanBase}=d`, {
-      headers,
-      referrerPolicy: 'no-referrer',
-      signal: ctrl.signal,
-    }).finally(() => clearTimeout(timer));
+      const res = await fetch(`${cleanBase}=d`, {
+        headers,
+        referrerPolicy: 'no-referrer',
+        signal: ctrl.signal,
+      }).finally(() => clearTimeout(timer));
 
-    if (res.ok) {
-      const blob = await res.blob();
-      if (blob.size > 200 && blob.type.startsWith('image/')) {
-        return blob;
+      if (res.ok) {
+        const blob = await res.blob();
+        if (await isValidImageBlob(blob)) {
+          return blob;
+        }
+      } else if (res.status === 401 || res.status === 403) {
+        onAuthExpired?.();
       }
-    } else if (res.status === 401 || res.status === 403) {
-      onAuthExpired?.();
+    } catch {
+      // All attempts failed
     }
-  } catch {
-    // All attempts failed
   }
 
   return null;
@@ -434,6 +574,10 @@ export interface PhotoCacheHookResult {
    * Monotonic version counter that increments whenever cache state changes
    */
   cacheVersion: number;
+  /**
+   * Invalidate a broken photo at index from memory and disk caches
+   */
+  invalidatePhoto: (index: number) => void;
 }
 
 /**
@@ -671,6 +815,18 @@ export function usePhotoCache(
     [photos, version]
   );
 
+  const invalidatePhoto = useCallback(
+    (index: number): void => {
+      if (!photos || index < 0 || index >= photos.length) return;
+      const photo = photos[index];
+      if (photo?.id) {
+        photoMemoryCache.invalidate(photo.id);
+        setVersion((v) => v + 1);
+      }
+    },
+    [photos]
+  );
+
   return {
     getPhotoSrc,
     isPhotoReady,
@@ -678,5 +834,6 @@ export function usePhotoCache(
     hasPhotoFailed,
     cachedCount: photos.filter((_, idx) => isPhotoReady(idx)).length,
     cacheVersion: version,
+    invalidatePhoto,
   };
 }

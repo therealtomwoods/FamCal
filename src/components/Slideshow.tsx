@@ -109,6 +109,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
+  const [fallbackIndex, setFallbackIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
   const [shuffleVersion, setShuffleVersion] = useState(0);
   const lastWorkingPhotoRef = useRef<{ src: string; photo: PhotoItem } | null>(null);
@@ -161,6 +162,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     hasPhotoFailed,
     cachedCount,
     cacheVersion,
+    invalidatePhoto,
   } = usePhotoCache(displayPhotos, currentIndex, userToken, onPhotosNeedRefresh);
 
   const currentIndexRef = useRef(currentIndex);
@@ -220,6 +222,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         commitTransition(nextReady);
       } else {
         waitingForNextRef.current = true;
+        setFallbackIndex((prev) => (prev + 1) % RELIABLE_FALLBACKS.length);
       }
     }, intervalMs);
 
@@ -228,19 +231,19 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   // Reactive cache watcher:
   // Triggered whenever cacheVersion updates (a background photo finished loading or failed).
-  // If the rotation timer is waiting for the next slide (or if cold start slide 0 failed),
+  // If the rotation timer is waiting for the next slide (or if active slide is not ready),
   // immediately transition as soon as a ready photo is available in cache.
   useEffect(() => {
     if (photosCount <= 1) return;
 
     const currentReady = isPhotoReady(currentIndex);
-    if (waitingForNextRef.current || (!currentReady && hasPhotoFailed(currentIndex))) {
+    if (waitingForNextRef.current || !currentReady) {
       const nextReady = findNextReadyIndex(currentIndex);
       if (nextReady !== null) {
         commitTransition(nextReady);
       }
     }
-  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, findNextReadyIndex, commitTransition]);
+  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, findNextReadyIndex, commitTransition]);
 
   // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
   useEffect(() => {
@@ -292,6 +295,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     const prevReady = findPrevReadyIndex(currentIndex);
     if (prevReady !== null) {
       commitTransition(prevReady);
+    } else {
+      setFallbackIndex((prev) => (prev - 1 + RELIABLE_FALLBACKS.length) % RELIABLE_FALLBACKS.length);
     }
   };
 
@@ -302,6 +307,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
       commitTransition(nextReady);
     } else {
       waitingForNextRef.current = true;
+      setFallbackIndex((prev) => (prev + 1) % RELIABLE_FALLBACKS.length);
     }
   };
 
@@ -347,10 +353,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   // Only show initial loading indicator if no family photo has ever been rendered yet
   const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(currentIndex);
+  const fallbackSrc = RELIABLE_FALLBACKS[fallbackIndex % RELIABLE_FALLBACKS.length];
 
   return (
     <div
-      className="relative w-full h-full overflow-hidden select-none bg-black group"
+      className="relative w-full h-full overflow-hidden select-none bg-slate-950 group"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -363,11 +370,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         const isActive = isCurrent;
         const rawSrc = getPhotoSrc(idx);
 
-        // If active slide's blob isn't loaded yet, stay on last working photo or single calm fallback
+        // If active slide's blob isn't loaded yet, stay on last working photo or calm fallback
         const displaySrc =
           rawSrc ||
           (isCurrent
-            ? lastWorkingPhotoRef.current?.src || RELIABLE_FALLBACKS[0]
+            ? lastWorkingPhotoRef.current?.src || fallbackSrc
             : undefined);
 
         if (!displaySrc) return null;
@@ -386,6 +393,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               aria-hidden="true"
               referrerPolicy="no-referrer"
               className="absolute inset-0 w-full h-full object-cover object-center blur-2xl scale-110 opacity-35 pointer-events-none"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.src !== fallbackSrc) {
+                  target.src = fallbackSrc;
+                }
+              }}
             />
             {/* Full photo scaled proportionally to fit completely inside the container */}
             <img
@@ -397,6 +410,18 @@ export const Slideshow: React.FC<SlideshowProps> = ({
               onLoad={() => {
                 if (rawSrc && photo) {
                   lastWorkingPhotoRef.current = { src: rawSrc, photo };
+                }
+              }}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (lastWorkingPhotoRef.current?.src === displaySrc) {
+                  lastWorkingPhotoRef.current = null;
+                }
+                if (rawSrc) {
+                  invalidatePhoto(idx);
+                }
+                if (target.src !== fallbackSrc) {
+                  target.src = fallbackSrc;
                 }
               }}
             />
@@ -414,8 +439,8 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         </div>
       )}
 
-      {/* Session Expiration Indicator (shown if session expired AND upcoming photos cannot be loaded from local disk cache) */}
-      {isSessionExpired && cachedCount <= 1 && hasPhotoFailed((currentIndex + 1) % photosCount) && (
+      {/* Session / Expired Photo URLs Indicator (shown when photos cannot be loaded from network or local disk cache) */}
+      {(isSessionExpired || cachedCount === 0) && !isInitialColdLoad && hasPhotoFailed(currentIndex) && (
         <div className="absolute top-3 left-3 z-30 pointer-events-auto">
           <button
             onClick={onOpenAlbumPicker}

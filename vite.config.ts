@@ -118,6 +118,10 @@ export default defineConfig(({ command }) => {
       VitePWA({
         registerType: 'prompt',
         includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
+        workbox: {
+          navigateFallbackDenylist: [/^\/api\//],
+          cleanupOutdatedCaches: true,
+        },
         manifest: {
           name: 'FamCal - Family Organizer',
           short_name: 'FamCal',
