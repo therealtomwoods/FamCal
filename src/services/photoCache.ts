@@ -11,13 +11,31 @@ interface CachedPhoto {
 const LEGACY_DISK_CACHE_NAME = 'famcal-photo-blobs-v1';
 const DISK_CACHE_NAME = 'famcal-photo-blobs-v2';
 
-// Clean up legacy v1 cache that may contain non-image fallback responses
-if (typeof caches !== 'undefined') {
-  caches.delete(LEGACY_DISK_CACHE_NAME).catch(() => {});
-}
-
 function getDiskCacheUrl(photoId: string): string {
   return `https://famcal-cache.local/photo/${encodeURIComponent(photoId)}`;
+}
+
+async function readBlobHeaderBytes(blob: Blob, length = 12): Promise<Uint8Array | null> {
+  const slice = blob.slice(0, length);
+  if (typeof slice.arrayBuffer === 'function') {
+    const buf = await slice.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (reader.result instanceof ArrayBuffer) {
+          resolve(new Uint8Array(reader.result));
+        } else {
+          resolve(null);
+        }
+      };
+      reader.onerror = () => resolve(null);
+      reader.readAsArrayBuffer(slice);
+    });
+  }
+  return null;
 }
 
 /**
@@ -27,8 +45,10 @@ function getDiskCacheUrl(photoId: string): string {
 export async function isValidImageBlob(blob: Blob | null | undefined): Promise<boolean> {
   if (!blob || blob.size <= 200) return false;
   try {
-    const buf = await blob.slice(0, 12).arrayBuffer();
-    const b = new Uint8Array(buf);
+    const b = await readBlobHeaderBytes(blob, 12);
+    if (!b) {
+      return Boolean(blob.type && blob.type.startsWith('image/') && blob.size > 1000);
+    }
     if (b.length < 4) return false;
 
     // JPEG: FF D8 FF
@@ -60,14 +80,14 @@ export async function isValidImageBlob(blob: Blob | null | undefined): Promise<b
 
     return false;
   } catch {
-    return false;
+    return Boolean(blob.type && blob.type.startsWith('image/') && blob.size > 1000);
   }
 }
 
 /**
  * Verifies that the browser can actually decode and render the image URL with non-zero dimensions.
  */
-export function verifyImageDecodes(url: string, timeoutMs = 6000): Promise<boolean> {
+export function verifyImageDecodes(url: string, timeoutMs = 4500): Promise<boolean> {
   if (typeof window === 'undefined' || !url) return Promise.resolve(false);
   return new Promise((resolve) => {
     const img = new window.Image();
@@ -81,7 +101,9 @@ export function verifyImageDecodes(url: string, timeoutMs = 6000): Promise<boole
       resolve(ok);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
-    img.referrerPolicy = 'no-referrer';
+    if (!url.startsWith('blob:') && !url.startsWith('data:')) {
+      img.referrerPolicy = 'no-referrer';
+    }
     img.onload = () => finish(img.naturalWidth > 0 && img.naturalHeight > 0);
     img.onerror = () => finish(false);
     img.src = url;
@@ -90,32 +112,41 @@ export function verifyImageDecodes(url: string, timeoutMs = 6000): Promise<boole
 
 export async function getDiskCachedBlob(photoId: string): Promise<Blob | null> {
   if (typeof caches === 'undefined' || !photoId) return null;
-  try {
-    const cache = await caches.open(DISK_CACHE_NAME);
-    const res = await cache.match(getDiskCacheUrl(photoId));
-    if (res && res.ok) {
-      const blob = await res.blob();
-      if (await isValidImageBlob(blob)) {
-        return blob;
-      } else {
-        await cache.delete(getDiskCacheUrl(photoId));
+  const cacheUrl = getDiskCacheUrl(photoId);
+
+  for (const cacheName of [DISK_CACHE_NAME, LEGACY_DISK_CACHE_NAME]) {
+    try {
+      const cache = await caches.open(cacheName);
+      const res = await cache.match(cacheUrl);
+      if (res && res.ok) {
+        const blob = await res.blob();
+        if (await isValidImageBlob(blob)) {
+          return blob;
+        } else {
+          await cache.delete(cacheUrl);
+        }
       }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
   return null;
 }
 
 export async function hasDiskCachedBlob(photoId: string): Promise<boolean> {
   if (typeof caches === 'undefined' || !photoId) return false;
-  try {
-    const cache = await caches.open(DISK_CACHE_NAME);
-    const res = await cache.match(getDiskCacheUrl(photoId));
-    return Boolean(res && res.ok);
-  } catch {
-    return false;
+  const cacheUrl = getDiskCacheUrl(photoId);
+
+  for (const cacheName of [DISK_CACHE_NAME, LEGACY_DISK_CACHE_NAME]) {
+    try {
+      const cache = await caches.open(cacheName);
+      const res = await cache.match(cacheUrl);
+      if (res && res.ok) return true;
+    } catch {
+      // ignore
+    }
   }
+  return false;
 }
 
 export async function putDiskCachedBlob(photoId: string, blob: Blob): Promise<void> {
@@ -136,11 +167,14 @@ export async function putDiskCachedBlob(photoId: string, blob: Blob): Promise<vo
 
 export async function deleteDiskCachedBlob(photoId: string): Promise<void> {
   if (typeof caches === 'undefined' || !photoId) return;
-  try {
-    const cache = await caches.open(DISK_CACHE_NAME);
-    await cache.delete(getDiskCacheUrl(photoId));
-  } catch {
-    // ignore
+  const cacheUrl = getDiskCacheUrl(photoId);
+  for (const cacheName of [DISK_CACHE_NAME, LEGACY_DISK_CACHE_NAME]) {
+    try {
+      const cache = await caches.open(cacheName);
+      await cache.delete(cacheUrl);
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -154,22 +188,33 @@ export async function clearDiskPhotoCache(): Promise<void> {
   }
 }
 
-function safeRevokeBlobUrl(url?: string): void {
+function safeRevokeBlobUrl(url?: string, immediate = false): void {
   if (!url || !url.startsWith('blob:')) return;
-  try {
-    URL.revokeObjectURL(url);
-  } catch {
-    // ignore
+  if (immediate) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+    return;
   }
+  // Delay revocation by 15 seconds so any active <img> or crossfade fallback never sees a revoked blob URL
+  setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }, 15000);
 }
 
-// Global in-memory cache of active object URLs (keeps at most 12 object URLs in RAM)
+// Global in-memory cache of active object URLs (keeps up to 20 object URLs in RAM)
 class PhotoMemoryCache {
   private cache = new Map<string, CachedPhoto>();
   private inFlight = new Map<string, Promise<string | null>>();
   private failed = new Set<string>();
   private failureTimestamps = new Map<string, number>();
-  private maxCacheEntries = 12;
+  private maxCacheEntries = 20;
 
   /**
    * Get cached blob/display URL for a photo if available
@@ -307,23 +352,24 @@ class PhotoMemoryCache {
     onAuthExpired?: () => void
   ): Promise<string | null> {
     const photoId = photo.id;
+    const rawUrl = photo.url || '';
 
     // 1. Check if already in memory
     const existing = this.get(photoId);
     if (existing) return existing;
 
     // 2. If photo URL is already a self-contained blob: or data: URL
-    if (photo.url.startsWith('blob:') || photo.url.startsWith('data:')) {
-      return photo.url;
+    if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) {
+      return rawUrl;
     }
 
     // 3. If it is a public URL (e.g. Unsplash demo photo)
-    if (!photo.baseUrl && photo.url && (photo.url.includes('unsplash.com') || photo.url.startsWith('/'))) {
-      return photo.url;
+    if (!photo.baseUrl && rawUrl && (rawUrl.includes('unsplash.com') || rawUrl.startsWith('/'))) {
+      return rawUrl;
     }
 
     // 4. In-flight request deduplication (keyed by photoId + clean baseUrl so refreshed URLs bypass stale requests)
-    const cleanKey = (photo.baseUrl || photo.url || '').split('=')[0];
+    const cleanKey = (photo.baseUrl || rawUrl || '').split('=')[0];
     const inFlightKey = `${photoId}:${cleanKey}`;
     const active = this.inFlight.get(inFlightKey);
     if (active) return active;
@@ -340,7 +386,7 @@ class PhotoMemoryCache {
             this.failureTimestamps.delete(photoId);
             return blobUrl;
           } else {
-            safeRevokeBlobUrl(blobUrl);
+            safeRevokeBlobUrl(blobUrl, true);
             await deleteDiskCachedBlob(photoId);
           }
         }
@@ -361,21 +407,25 @@ class PhotoMemoryCache {
             this.failureTimestamps.delete(photoId);
             return blobUrl;
           } else {
-            safeRevokeBlobUrl(blobUrl);
+            safeRevokeBlobUrl(blobUrl, true);
           }
         }
 
         // 8. Fallback for static hosts (e.g. GitHub Pages) or non-CORS environments:
         // Test direct browser <img> loading without custom headers
-        const directBase = (photo.baseUrl || photo.url || '').split('=')[0];
+        const directBase = (photo.baseUrl || rawUrl || '').split('=')[0];
         if (directBase && directBase.startsWith('https://')) {
-          const directCandidates = [
-            `${directBase}=w1200-h800`,
-            photo.url && photo.url.startsWith('https://') ? photo.url : '',
-          ].filter(Boolean);
+          const directCandidates = Array.from(
+            new Set(
+              [
+                `${directBase}=w1200-h800`,
+                rawUrl && rawUrl.startsWith('https://') ? rawUrl : '',
+              ].filter(Boolean)
+            )
+          );
 
           for (const candidateUrl of directCandidates) {
-            if (await verifyImageDecodes(candidateUrl, 5000)) {
+            if (await verifyImageDecodes(candidateUrl, 3500)) {
               this.set(photoId, candidateUrl);
               this.failed.delete(photoId);
               this.failureTimestamps.delete(photoId);
@@ -434,7 +484,7 @@ async function fetchPhotoBlobBytes(
   try {
     const proxyUrl = `/api/photo?url=${encodeURIComponent(targetUrl)}`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const timer = setTimeout(() => ctrl.abort(), 3500);
 
     const res = await fetch(proxyUrl, {
       headers,
@@ -461,7 +511,7 @@ async function fetchPhotoBlobBytes(
   try {
     const altProxyUrl = `/api/photo?url=${encodeURIComponent(`${cleanBase}=w1600-h1600`)}`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3500);
+    const timer = setTimeout(() => ctrl.abort(), 2500);
 
     const res = await fetch(altProxyUrl, {
       headers,
@@ -483,7 +533,7 @@ async function fetchPhotoBlobBytes(
   if (!proxyRejectedUpstream && token) {
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const timer = setTimeout(() => ctrl.abort(), 3500);
 
       const res = await fetch(targetUrl, {
         headers,
@@ -507,7 +557,7 @@ async function fetchPhotoBlobBytes(
   // 3. Simple GET fetch without custom headers (avoids CORS preflight failure on static hosts)
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4500);
+    const timer = setTimeout(() => ctrl.abort(), 3500);
 
     const res = await fetch(targetUrl, {
       referrerPolicy: 'no-referrer',
@@ -528,7 +578,7 @@ async function fetchPhotoBlobBytes(
   if (!proxyRejectedUpstream) {
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const timer = setTimeout(() => ctrl.abort(), 3500);
 
       const res = await fetch(`${cleanBase}=d`, {
         headers,
@@ -603,23 +653,36 @@ export function usePhotoCache(
 
   const photosLength = photos?.length || 0;
 
-  // Clear transient failure markers whenever token or photo list updates
+  // Signature of token + first/last photo baseUrls so we only reset failed state when URLs actually change
+  const urlSignature = `${token || ''}:${photosLength}:${photos?.[0]?.baseUrl || ''}:${photos?.[photosLength - 1]?.baseUrl || ''}`;
+
+  // Clear transient failure markers only when token or actual baseUrl signature updates
   useEffect(() => {
     if (token || photosLength > 0) {
       photoMemoryCache.clearFailed();
     }
-  }, [token, photos, photosLength]);
+  }, [urlSignature, token, photosLength]);
 
   // Window configuration: current + up to 4 ready photos ahead + 1 behind
   const AHEAD_COUNT = 4;
 
   // Background sequential queue runner:
-  // Loads currentIndex first, then scans forward to ensure up to AHEAD_COUNT working photos
-  // are ready in memory ahead of currentIndex (automatically skipping over any failed photos).
+  // 1. Fast-path loads disk-cached photos first (<20ms) so a family photo is always ready immediately on startup.
+  // 2. Then loads uncached network photos in the background.
   useEffect(() => {
     if (photosLength === 0) return;
 
     const currentRunId = ++queueRunIdRef.current;
+
+    const isImmediatelyReady = (photo: PhotoItem): boolean => {
+      const rawUrl = photo.url || '';
+      return (
+        photoMemoryCache.has(photo.id) ||
+        rawUrl.startsWith('data:') ||
+        rawUrl.startsWith('blob:') ||
+        (!photo.baseUrl && Boolean(rawUrl) && rawUrl.includes('unsplash.com'))
+      );
+    };
 
     const runSequentialQueue = async () => {
       const protectedIds = new Set<string>();
@@ -632,12 +695,7 @@ export function usePhotoCache(
         const photo = photos[idx];
         if (!photo) return false;
 
-        if (
-          photoMemoryCache.has(photo.id) ||
-          photo.url.startsWith('data:') ||
-          photo.url.startsWith('blob:') ||
-          (!photo.baseUrl && photo.url && photo.url.includes('unsplash.com'))
-        ) {
+        if (isImmediatelyReady(photo)) {
           protectedIds.add(photo.id);
           return true;
         }
@@ -663,15 +721,20 @@ export function usePhotoCache(
         }
       };
 
-      // 1. Prioritize active slide first
-      if (queueRunIdRef.current !== currentRunId) return;
-      await loadSingleIndex(currentIndex);
-
-      // 2. Scan forward and cache up to AHEAD_COUNT ready photos ahead of currentIndex
+      // Phase 1: Instant Disk-Cache Fast Path (<20ms)
+      // Check currentIndex and scan ahead for photos already in persistent CacheStorage on disk
+      // BEFORE blocking on any slow network requests!
       let readyAhead = 0;
-      let networkAttempts = 0;
-      const maxNetworkAttempts = Math.min(photosLength - 1, 25);
+      const currentReadyOrOnDisk =
+        currentPhoto &&
+        (isImmediatelyReady(currentPhoto) || (await hasDiskCachedBlob(currentPhoto.id)));
 
+      if (currentReadyOrOnDisk) {
+        if (queueRunIdRef.current !== currentRunId) return;
+        await loadSingleIndex(currentIndex);
+      }
+
+      // Scan forward for disk-cached or memory-ready photos so Slideshow has immediate slides ready
       for (let offset = 1; offset < photosLength; offset++) {
         if (queueRunIdRef.current !== currentRunId) break;
         if (readyAhead >= AHEAD_COUNT) break;
@@ -680,44 +743,51 @@ export function usePhotoCache(
         const photo = photos[idx];
         if (!photo) continue;
 
-        const alreadyReady =
-          photoMemoryCache.has(photo.id) ||
-          photo.url.startsWith('data:') ||
-          photo.url.startsWith('blob:') ||
-          (!photo.baseUrl && photo.url && photo.url.includes('unsplash.com'));
-
-        if (alreadyReady) {
+        if (isImmediatelyReady(photo)) {
           protectedIds.add(photo.id);
           readyAhead++;
           continue;
         }
 
-        if (photoMemoryCache.isFailed(photo.id)) {
+        const onDisk = await hasDiskCachedBlob(photo.id);
+        if (onDisk) {
+          const ok = await loadSingleIndex(idx);
+          if (ok) {
+            readyAhead++;
+          }
+        }
+      }
+
+      // Phase 2: Network Fetch Path for Uncached Photos
+      // If currentIndex wasn't on disk, try loading it from network now
+      if (!currentReadyOrOnDisk) {
+        if (queueRunIdRef.current !== currentRunId) return;
+        await loadSingleIndex(currentIndex);
+      }
+
+      // Try loading upcoming uncached photos from network so newly encountered slides are cached
+      let networkCount = 0;
+      const maxNetworkAttempts = Math.min(photosLength - 1, 6);
+
+      for (let offset = 1; offset < photosLength; offset++) {
+        if (queueRunIdRef.current !== currentRunId) break;
+        if (networkCount >= maxNetworkAttempts) break;
+
+        const idx = (currentIndex + offset) % photosLength;
+        const photo = photos[idx];
+        if (!photo || isImmediatelyReady(photo) || photoMemoryCache.isFailed(photo.id)) {
           continue;
         }
 
-        // Check if on disk first (instant & doesn't count against network attempt cap)
-        const onDisk = await hasDiskCachedBlob(photo.id);
-        if (!onDisk) {
-          if (networkAttempts >= maxNetworkAttempts) {
-            onNeedBaseUrlRefresh?.();
-            // If we already have at least one ready photo ahead, stop scanning so we don't
-            // skip hundreds of unplayed photos to wrap back to earlier disk-cached slides.
-            if (readyAhead > 0) {
-              break;
-            }
-            continue;
-          }
-          networkAttempts++;
-        }
-
+        networkCount++;
         const ok = await loadSingleIndex(idx);
         if (ok) {
           readyAhead++;
+          if (readyAhead >= AHEAD_COUNT + 2) break;
         }
 
         if (queueRunIdRef.current !== currentRunId) break;
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await new Promise((resolve) => setTimeout(resolve, 40));
       }
 
       if (queueRunIdRef.current === currentRunId) {
@@ -735,20 +805,20 @@ export function usePhotoCache(
   }, [photos, currentIndex, token, photosLength, onNeedBaseUrlRefresh]);
 
   // Background parallel disk archiver:
-  // Copies all 1,000+ selected photos into persistent CacheStorage on disk using 4 concurrent workers,
-  // starting from currentIndex (rather than restarting at index 0) and triggering baseUrl refresh if URLs expire.
+  // Copies all 1,000+ selected photos into persistent CacheStorage on disk using 2 concurrent workers,
+  // starting from currentIndex and pausing gracefully if network URLs are currently expired.
   useEffect(() => {
     if (photosLength === 0) return;
     let cancelled = false;
 
     const archiveRemainingToDisk = async () => {
-      await new Promise((r) => setTimeout(r, 1200));
+      await new Promise((r) => setTimeout(r, 2500));
       if (cancelled) return;
 
       const startIdx = currentIndexRef.current % photosLength;
       let cursor = 0;
       let consecutiveFailures = 0;
-      const CONCURRENCY = 4;
+      const CONCURRENCY = 2;
 
       const worker = async () => {
         while (!cancelled && cursor < photosLength) {
@@ -756,7 +826,8 @@ export function usePhotoCache(
           const idx = (startIdx + offset) % photosLength;
           const p = photos[idx];
           if (!p || !p.id || !p.baseUrl) continue;
-          if (p.url.startsWith('data:') || p.url.startsWith('blob:') || p.url.includes('unsplash.com')) continue;
+          const rawUrl = p.url || '';
+          if (rawUrl.startsWith('data:') || rawUrl.startsWith('blob:') || rawUrl.includes('unsplash.com')) continue;
 
           const alreadyOnDisk = await hasDiskCachedBlob(p.id);
           if (alreadyOnDisk) continue;
@@ -770,10 +841,10 @@ export function usePhotoCache(
               setVersion((v) => v + 1);
             } else {
               consecutiveFailures++;
-              if (consecutiveFailures >= 8) {
+              if (consecutiveFailures >= 6) {
                 onNeedBaseUrlRefresh?.();
-                // Pause briefly while fresh baseUrls are fetched
-                await new Promise((r) => setTimeout(r, 5000));
+                // Pause for 30s if network URLs are currently expired so we don't flood the network
+                await new Promise((r) => setTimeout(r, 30000));
                 consecutiveFailures = 0;
               }
             }
@@ -781,7 +852,7 @@ export function usePhotoCache(
             // ignore
           }
 
-          await new Promise((r) => setTimeout(r, 80));
+          await new Promise((r) => setTimeout(r, 150));
         }
       };
 
@@ -795,7 +866,7 @@ export function usePhotoCache(
     return () => {
       cancelled = true;
     };
-  }, [photos, photosLength, token, onNeedBaseUrlRefresh]);
+  }, [urlSignature, photosLength, token, onNeedBaseUrlRefresh]);
 
   // Helper getters (depend on version so callers always see fresh cache state on re-render)
   const getPhotoSrc = useCallback(
@@ -810,13 +881,14 @@ export function usePhotoCache(
       if (cached) return cached;
 
       // 2. Self-contained data or blob URL
-      if (photo.url.startsWith('data:') || photo.url.startsWith('blob:')) {
-        return photo.url;
+      const rawUrl = photo.url || '';
+      if (rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) {
+        return rawUrl;
       }
 
       // 3. Public demo images (Unsplash)
-      if (!photo.baseUrl && photo.url && photo.url.includes('unsplash.com')) {
-        return photo.url;
+      if (!photo.baseUrl && rawUrl && rawUrl.includes('unsplash.com')) {
+        return rawUrl;
       }
 
       // 4. Otherwise, not ready yet

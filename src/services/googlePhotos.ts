@@ -92,18 +92,28 @@ function normalizeStoredPhotos(parsed: any[]): PhotoItem[] {
   return parsed
     .filter((p) => p && p.id && (p.baseUrl || p.url))
     .map((p) => {
-      const cleanBase = p.baseUrl ? p.baseUrl.split('=')[0] : undefined;
+      const rawBase = typeof p.baseUrl === 'string' ? p.baseUrl.trim() : '';
+      const cleanBase = rawBase ? rawBase.split('=')[0] : undefined;
+      const rawUrl = typeof p.url === 'string' ? p.url.trim() : '';
+      const isSelfContainedUrl = rawUrl.startsWith('data:') || rawUrl.startsWith('blob:');
+      const normalizedUrl = isSelfContainedUrl
+        ? rawUrl
+        : cleanBase
+        ? `${cleanBase}=w1200-h800`
+        : rawUrl;
+
       return {
-        id: p.id,
-        url: cleanBase ? `${cleanBase}=w1200-h800` : p.url,
-        baseUrl: cleanBase || p.baseUrl,
+        id: String(p.id),
+        url: normalizedUrl || '',
+        baseUrl: cleanBase || (rawBase || undefined),
         filename: p.filename,
         caption: p.caption,
         dateTaken: p.dateTaken,
         width: p.width,
         height: p.height,
       };
-    });
+    })
+    .filter((p) => Boolean(p.url || p.baseUrl));
 }
 
 /**
@@ -157,36 +167,42 @@ export async function loadStoredPhotos(): Promise<PhotoItem[]> {
 }
 
 /**
- * Cache picked photos metadata in both compact localStorage (omitting duplicate URL strings)
- * and unlimited CacheStorage so 1,000–2,000+ photos never fail or truncate on quota limits.
+ * Cache picked photos metadata in both unlimited CacheStorage and localStorage
+ * so 1,000–2,000+ photos never fail or truncate on quota limits.
  */
 export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
-  const compact = photos.map((p) => {
+  const fullEntries = photos.map((p) => {
     const cleanBase = p.baseUrl ? p.baseUrl.split('=')[0] : undefined;
-    const entry: Record<string, any> = { id: p.id };
-    if (cleanBase) {
-      entry.baseUrl = cleanBase;
-    } else if (p.url && !p.url.startsWith('data:') && !p.url.startsWith('blob:')) {
-      entry.url = p.url;
-    }
-    if (p.filename) entry.filename = p.filename;
-    if (p.caption) entry.caption = p.caption;
-    if (p.dateTaken) entry.dateTaken = p.dateTaken;
-    if (p.width) entry.width = p.width;
-    if (p.height) entry.height = p.height;
-    return entry;
+    const rawUrl = typeof p.url === 'string' ? p.url : '';
+    const effectiveUrl = rawUrl.startsWith('data:')
+      ? rawUrl
+      : cleanBase
+      ? `${cleanBase}=w1200-h800`
+      : rawUrl.startsWith('blob:')
+      ? ''
+      : rawUrl;
+    return {
+      id: p.id,
+      url: effectiveUrl,
+      baseUrl: cleanBase || p.baseUrl,
+      filename: p.filename,
+      caption: p.caption,
+      dateTaken: p.dateTaken,
+      width: p.width,
+      height: p.height,
+    };
   });
 
-  const serialized = JSON.stringify(compact);
+  const fullSerialized = JSON.stringify(fullEntries);
 
-  // 1. Save to high-capacity CacheStorage (never constrained by 5MB localStorage limit)
+  // 1. Save full representation to high-capacity CacheStorage (never constrained by 5MB localStorage limit)
   if (typeof caches !== 'undefined') {
     caches
       .open(META_CACHE_NAME)
       .then((cache) =>
         cache.put(
           META_CACHE_URL,
-          new Response(serialized, {
+          new Response(fullSerialized, {
             headers: { 'Content-Type': 'application/json' },
           })
         )
@@ -194,11 +210,22 @@ export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
       .catch(() => {});
   }
 
-  // 2. Save compact representation to localStorage for synchronous startup
+  // 2. Save to localStorage for synchronous startup (fallback to compact format if >5MB quota)
   try {
-    localStorage.setItem(PICKED_PHOTOS_KEY, serialized);
-  } catch (err) {
-    console.warn('localStorage quota reached for picked photos; using CacheStorage for full list:', err);
+    localStorage.setItem(PICKED_PHOTOS_KEY, fullSerialized);
+  } catch {
+    try {
+      const compact = fullEntries.map((p) => ({
+        id: p.id,
+        url: p.baseUrl ? `${p.baseUrl}=w1200-h800` : p.url,
+        baseUrl: p.baseUrl,
+        dateTaken: p.dateTaken,
+        filename: p.filename,
+      }));
+      localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(compact));
+    } catch (err) {
+      console.warn('localStorage quota reached for picked photos; using CacheStorage for full list:', err);
+    }
   }
 }
 
@@ -688,15 +715,20 @@ export async function refreshPhotoUrls(
     }
   }
 
-  // 2. Refresh from legacy album
+  // 2. Refresh from legacy album (only if an explicit custom album ID was selected)
   if (
     currentAlbumId &&
-    currentAlbumId !== 'PICKED_GOOGLE_PHOTOS' &&
+    !isPickedAlbum &&
     !currentAlbumId.startsWith('album-family')
   ) {
     try {
+      const existing = await loadStoredPhotos();
       const freshAlbumPhotos = await fetchAlbumPhotos(token, currentAlbumId);
-      if (freshAlbumPhotos.length > 0) {
+      const isActuallyFresh =
+        freshAlbumPhotos.length > 0 &&
+        freshAlbumPhotos[0]?.baseUrl &&
+        freshAlbumPhotos[0]?.baseUrl !== existing[0]?.baseUrl;
+      if (isActuallyFresh) {
         saveStoredPickedPhotos(freshAlbumPhotos);
         localStorage.setItem('famcal_photos_fetched_at', Date.now().toString());
         return { success: true, photos: freshAlbumPhotos };

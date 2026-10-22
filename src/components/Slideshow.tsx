@@ -213,16 +213,14 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  // Find the next photo after fromIndex that is cached & ready in memory WITHOUT jumping backwards
-  // into the trailing 12-photo RAM cache window of slides that were just shown.
+  // Find the next photo after fromIndex that is cached & ready in memory without repeating
+  // any photo already displayed in the current pass.
   const findNextReadyIndex = useCallback(
     (fromIndex: number): number | null => {
       if (photosCount <= 1) return null;
 
-      // 1. Primary forward lookahead window (up to 25 slides ahead):
-      // Pick the first ready photo ahead that hasn't been shown in this cycle yet.
-      const forwardLimit = Math.min(photosCount - 1, 25);
-      for (let offset = 1; offset <= forwardLimit; offset++) {
+      // 1. Scan forward for the first ready photo that hasn't been displayed in this cycle yet
+      for (let offset = 1; offset < photosCount; offset++) {
         const idx = (fromIndex + offset) % photosCount;
         const candidate = displayPhotos[idx];
         if (candidate && isPhotoReady(idx) && !visitedInCycleRef.current.has(candidate.id)) {
@@ -230,28 +228,13 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         }
       }
 
-      // 2. If the immediate next slides are still actively downloading (and haven't failed),
-      // return null so the timer waits a moment for the next forward slide instead of skipping ahead or wrapping back.
-      const immediateCheckCount = Math.min(photosCount - 1, 4);
-      for (let offset = 1; offset <= immediateCheckCount; offset++) {
-        const idx = (fromIndex + offset) % photosCount;
-        if (!hasPhotoFailed(idx)) {
-          return null;
-        }
-      }
-
-      // 3. If immediate slides failed (e.g. offline or expired URLs), scan further forward for ANY unvisited ready photo
-      for (let offset = forwardLimit + 1; offset < photosCount; offset++) {
-        const idx = (fromIndex + offset) % photosCount;
-        const candidate = displayPhotos[idx];
-        if (candidate && isPhotoReady(idx) && !visitedInCycleRef.current.has(candidate.id)) {
-          return idx;
-        }
-      }
-
-      // 4. All available ready photos have been shown in this pass: clear visited set to begin a new pass
+      // 2. All available ready photos have been shown in this pass: clear visited history and start a fresh pass
       if (visitedInCycleRef.current.size > 0) {
         visitedInCycleRef.current.clear();
+        const currentPhoto = displayPhotos[fromIndex];
+        if (currentPhoto?.id) {
+          visitedInCycleRef.current.add(currentPhoto.id);
+        }
         for (let offset = 1; offset < photosCount; offset++) {
           const idx = (fromIndex + offset) % photosCount;
           if (isPhotoReady(idx)) {
@@ -262,7 +245,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
       return null;
     },
-    [photosCount, displayPhotos, isPhotoReady, hasPhotoFailed]
+    [photosCount, displayPhotos, isPhotoReady]
   );
 
   const findPrevReadyIndex = useCallback(
@@ -296,17 +279,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
           visitedInCycleRef.current.add(nextPhoto.id);
         }
 
-        // If we wrapped around past the end of the entire deck, clear visited history for the new pass
-        if (nextIdx < current && visitedInCycleRef.current.size >= Math.min(photosCount, 50)) {
-          visitedInCycleRef.current.clear();
-        }
-
         setPreviousIndex(current);
         setCurrentIndex(nextIdx);
         saveStoredCursor(nextIdx);
       }
     },
-    [displayPhotos, photosCount]
+    [displayPhotos]
   );
 
   // Automatic photo rotation every intervalSeconds (e.g. 15s):
@@ -330,20 +308,20 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   }, [currentIndex, photosCount, intervalSeconds, commitTransition]);
 
   // Reactive cache watcher:
-  // Triggered whenever cacheVersion updates (a background photo finished loading or failed).
-  // If the rotation timer is waiting for the next slide (or if active slide failed),
+  // Triggered whenever cacheVersion updates (a background photo finished loading).
+  // If the active slide is not ready yet (e.g. cold start) or the rotation timer is waiting,
   // immediately transition as soon as a ready photo is available in cache.
   useEffect(() => {
     if (photosCount <= 1) return;
 
     const currentReady = isPhotoReady(currentIndex);
-    if (waitingForNextRef.current || (!currentReady && hasPhotoFailed(currentIndex))) {
+    if (waitingForNextRef.current || !currentReady) {
       const nextReady = findNextReadyIndex(currentIndex);
       if (nextReady !== null) {
         commitTransition(nextReady);
       }
     }
-  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, findNextReadyIndex, commitTransition]);
+  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, findNextReadyIndex, commitTransition]);
 
   // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
   useEffect(() => {
@@ -373,9 +351,13 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     }
   }, [photosCount, currentIndex]);
 
+  // Synchronously clamp currentIndex during render so an out-of-bounds cursor from localStorage
+  // never leaves displayPhotos[activeIndex] undefined on initial mount
+  const activeIndex = photosCount > 0 ? ((currentIndex % photosCount) + photosCount) % photosCount : 0;
+
   // Keep last working photo & its exact metadata paired together
-  const currentRawSrc = getPhotoSrc(currentIndex);
-  const currentCandidatePhoto = displayPhotos?.[currentIndex];
+  const currentRawSrc = getPhotoSrc(activeIndex);
+  const currentCandidatePhoto = displayPhotos?.[activeIndex];
 
   useEffect(() => {
     if (currentRawSrc && currentCandidatePhoto) {
@@ -394,7 +376,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const handlePrev = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const prevReady = findPrevReadyIndex(currentIndex);
+    const prevReady = findPrevReadyIndex(activeIndex);
     if (prevReady !== null) {
       commitTransition(prevReady);
     } else {
@@ -404,7 +386,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const nextReady = findNextReadyIndex(currentIndex);
+    const nextReady = findNextReadyIndex(activeIndex);
     if (nextReady !== null) {
       commitTransition(nextReady);
     } else {
@@ -448,17 +430,17 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   }
 
   // Virtualized slide window: mount active, previous (during crossfade), and next ready slide
-  const visibleIndices: number[] = [currentIndex];
-  if (previousIndex !== null && previousIndex !== currentIndex) {
+  const visibleIndices: number[] = [activeIndex];
+  if (previousIndex !== null && previousIndex !== activeIndex && previousIndex < photosCount) {
     visibleIndices.push(previousIndex);
   }
-  const nextReadyIdx = findNextReadyIndex(currentIndex) ?? ((currentIndex + 1) % photosCount);
-  if (nextReadyIdx !== currentIndex && !visibleIndices.includes(nextReadyIdx)) {
+  const nextReadyIdx = findNextReadyIndex(activeIndex) ?? ((activeIndex + 1) % photosCount);
+  if (nextReadyIdx !== activeIndex && !visibleIndices.includes(nextReadyIdx)) {
     visibleIndices.push(nextReadyIdx);
   }
 
   // Only show initial loading indicator if no family photo has ever been rendered yet
-  const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(currentIndex);
+  const isInitialColdLoad = !currentRawSrc && !lastWorkingPhotoRef.current && isPhotoLoading(activeIndex);
   const fallbackSrc = RELIABLE_FALLBACKS[fallbackIndex % RELIABLE_FALLBACKS.length];
 
   return (
@@ -472,7 +454,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         const photo = displayPhotos[idx];
         if (!photo) return null;
 
-        const isCurrent = idx === currentIndex;
+        const isCurrent = idx === activeIndex;
         const isActive = isCurrent;
         const rawSrc = getPhotoSrc(idx);
 
