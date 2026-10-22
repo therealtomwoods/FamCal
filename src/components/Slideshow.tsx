@@ -98,6 +98,46 @@ function shuffleArray<T>(items: T[]): T[] {
   return result;
 }
 
+const SHUFFLED_DECK_STORAGE_KEY = 'famcal_shuffled_deck_v1';
+const SLIDESHOW_CURSOR_STORAGE_KEY = 'famcal_slideshow_cursor_v1';
+
+function loadStoredDeckIds(): string[] {
+  try {
+    const raw = localStorage.getItem(SHUFFLED_DECK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredDeckIds(ids: string[]): void {
+  try {
+    localStorage.setItem(SHUFFLED_DECK_STORAGE_KEY, JSON.stringify(ids));
+  } catch {
+    // ignore
+  }
+}
+
+function loadStoredCursor(): number {
+  try {
+    const raw = localStorage.getItem(SLIDESHOW_CURSOR_STORAGE_KEY);
+    const parsed = raw ? parseInt(raw, 10) : 0;
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveStoredCursor(index: number): void {
+  try {
+    localStorage.setItem(SLIDESHOW_CURSOR_STORAGE_KEY, String(index));
+  } catch {
+    // ignore
+  }
+}
+
 export const Slideshow: React.FC<SlideshowProps> = ({
   photos,
   intervalSeconds,
@@ -107,7 +147,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   isSessionExpired,
   randomOrder = true,
 }) => {
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState<number>(() => loadStoredCursor());
   const [previousIndex, setPreviousIndex] = useState<number | null>(null);
   const [fallbackIndex, setFallbackIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
@@ -115,8 +155,10 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const lastWorkingPhotoRef = useRef<{ src: string; photo: PhotoItem } | null>(null);
   const waitingForNextRef = useRef<boolean>(false);
 
-  // Shuffled photo IDs reference to preserve consistent sequence across background baseUrl refreshes
-  const shuffledIdsRef = useRef<string[]>([]);
+  // Shuffled photo IDs reference to preserve consistent sequence across reloads & background baseUrl refreshes
+  const shuffledIdsRef = useRef<string[]>(loadStoredDeckIds());
+  // Track photo IDs already shown in the current pass so we never loop back over recently displayed slides
+  const visitedInCycleRef = useRef<Set<string>>(new Set());
 
   // Compute active display sequence: randomized or chronological
   const displayPhotos = useMemo(() => {
@@ -131,7 +173,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     const existingIds = shuffledIdsRef.current;
     const existingSet = new Set(existingIds);
 
-    // If existing shuffled set matches current photos (e.g. background baseUrl refresh at 25m),
+    // If existing shuffled set matches current photos (e.g. page reload or background baseUrl refresh at 25m),
     // preserve the exact same random order and update objects with fresh URLs seamlessly!
     const hasSameIds =
       existingIds.length === currentIds.length &&
@@ -145,9 +187,12 @@ export const Slideshow: React.FC<SlideshowProps> = ({
         .filter(Boolean) as PhotoItem[];
     }
 
-    // New photo collection or manual reshuffle triggered: generate fresh unbiased shuffle
+    // New photo collection or manual reshuffle triggered: generate fresh unbiased shuffle across all 1,000+ photos
     const shuffled = shuffleArray(photos);
-    shuffledIdsRef.current = shuffled.map((p) => p.id);
+    const newIds = shuffled.map((p) => p.id);
+    shuffledIdsRef.current = newIds;
+    visitedInCycleRef.current.clear();
+    saveStoredDeckIds(newIds);
     return shuffled;
   }, [photos, randomOrder, shuffleVersion]);
 
@@ -168,19 +213,56 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  // Find the next photo after fromIndex that is already cached and ready in memory
+  // Find the next photo after fromIndex that is cached & ready in memory WITHOUT jumping backwards
+  // into the trailing 12-photo RAM cache window of slides that were just shown.
   const findNextReadyIndex = useCallback(
     (fromIndex: number): number | null => {
       if (photosCount <= 1) return null;
-      for (let offset = 1; offset < photosCount; offset++) {
+
+      // 1. Primary forward lookahead window (up to 25 slides ahead):
+      // Pick the first ready photo ahead that hasn't been shown in this cycle yet.
+      const forwardLimit = Math.min(photosCount - 1, 25);
+      for (let offset = 1; offset <= forwardLimit; offset++) {
         const idx = (fromIndex + offset) % photosCount;
-        if (isPhotoReady(idx)) {
+        const candidate = displayPhotos[idx];
+        if (candidate && isPhotoReady(idx) && !visitedInCycleRef.current.has(candidate.id)) {
           return idx;
         }
       }
+
+      // 2. If the immediate next slides are still actively downloading (and haven't failed),
+      // return null so the timer waits a moment for the next forward slide instead of skipping ahead or wrapping back.
+      const immediateCheckCount = Math.min(photosCount - 1, 4);
+      for (let offset = 1; offset <= immediateCheckCount; offset++) {
+        const idx = (fromIndex + offset) % photosCount;
+        if (!hasPhotoFailed(idx)) {
+          return null;
+        }
+      }
+
+      // 3. If immediate slides failed (e.g. offline or expired URLs), scan further forward for ANY unvisited ready photo
+      for (let offset = forwardLimit + 1; offset < photosCount; offset++) {
+        const idx = (fromIndex + offset) % photosCount;
+        const candidate = displayPhotos[idx];
+        if (candidate && isPhotoReady(idx) && !visitedInCycleRef.current.has(candidate.id)) {
+          return idx;
+        }
+      }
+
+      // 4. All available ready photos have been shown in this pass: clear visited set to begin a new pass
+      if (visitedInCycleRef.current.size > 0) {
+        visitedInCycleRef.current.clear();
+        for (let offset = 1; offset < photosCount; offset++) {
+          const idx = (fromIndex + offset) % photosCount;
+          if (isPhotoReady(idx)) {
+            return idx;
+          }
+        }
+      }
+
       return null;
     },
-    [photosCount, isPhotoReady]
+    [photosCount, displayPhotos, isPhotoReady, hasPhotoFailed]
   );
 
   const findPrevReadyIndex = useCallback(
@@ -200,14 +282,32 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   const findNextReadyIndexRef = useRef(findNextReadyIndex);
   findNextReadyIndexRef.current = findNextReadyIndex;
 
-  const commitTransition = useCallback((nextIdx: number) => {
-    const current = currentIndexRef.current;
-    waitingForNextRef.current = false;
-    if (current !== nextIdx) {
-      setPreviousIndex(current);
-      setCurrentIndex(nextIdx);
-    }
-  }, []);
+  const commitTransition = useCallback(
+    (nextIdx: number) => {
+      const current = currentIndexRef.current;
+      waitingForNextRef.current = false;
+      if (current !== nextIdx) {
+        const currentPhoto = displayPhotos?.[current];
+        if (currentPhoto?.id) {
+          visitedInCycleRef.current.add(currentPhoto.id);
+        }
+        const nextPhoto = displayPhotos?.[nextIdx];
+        if (nextPhoto?.id) {
+          visitedInCycleRef.current.add(nextPhoto.id);
+        }
+
+        // If we wrapped around past the end of the entire deck, clear visited history for the new pass
+        if (nextIdx < current && visitedInCycleRef.current.size >= Math.min(photosCount, 50)) {
+          visitedInCycleRef.current.clear();
+        }
+
+        setPreviousIndex(current);
+        setCurrentIndex(nextIdx);
+        saveStoredCursor(nextIdx);
+      }
+    },
+    [displayPhotos, photosCount]
+  );
 
   // Automatic photo rotation every intervalSeconds (e.g. 15s):
   // Transitions immediately to the next ready cached photo, or sets waitingForNextRef
@@ -231,19 +331,19 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   // Reactive cache watcher:
   // Triggered whenever cacheVersion updates (a background photo finished loading or failed).
-  // If the rotation timer is waiting for the next slide (or if active slide is not ready),
+  // If the rotation timer is waiting for the next slide (or if active slide failed),
   // immediately transition as soon as a ready photo is available in cache.
   useEffect(() => {
     if (photosCount <= 1) return;
 
     const currentReady = isPhotoReady(currentIndex);
-    if (waitingForNextRef.current || !currentReady) {
+    if (waitingForNextRef.current || (!currentReady && hasPhotoFailed(currentIndex))) {
       const nextReady = findNextReadyIndex(currentIndex);
       if (nextReady !== null) {
         commitTransition(nextReady);
       }
     }
-  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, findNextReadyIndex, commitTransition]);
+  }, [cacheVersion, currentIndex, photosCount, isPhotoReady, hasPhotoFailed, findNextReadyIndex, commitTransition]);
 
   // Handle visibility change: reset stale crossfade state if browser tab was backgrounded
   useEffect(() => {
@@ -269,6 +369,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
   useEffect(() => {
     if (photosCount > 0 && currentIndex >= photosCount) {
       setCurrentIndex(0);
+      saveStoredCursor(0);
     }
   }, [photosCount, currentIndex]);
 
@@ -278,6 +379,7 @@ export const Slideshow: React.FC<SlideshowProps> = ({
 
   useEffect(() => {
     if (currentRawSrc && currentCandidatePhoto) {
+      visitedInCycleRef.current.add(currentCandidatePhoto.id);
       lastWorkingPhotoRef.current = {
         src: currentRawSrc,
         photo: currentCandidatePhoto,
@@ -315,7 +417,11 @@ export const Slideshow: React.FC<SlideshowProps> = ({
     e.stopPropagation();
     if (photos && photos.length > 0) {
       const shuffled = shuffleArray(photos);
-      shuffledIdsRef.current = shuffled.map((p) => p.id);
+      const newIds = shuffled.map((p) => p.id);
+      shuffledIdsRef.current = newIds;
+      visitedInCycleRef.current.clear();
+      saveStoredDeckIds(newIds);
+      saveStoredCursor(0);
       setShuffleVersion((v) => v + 1);
       waitingForNextRef.current = false;
       setCurrentIndex(0);

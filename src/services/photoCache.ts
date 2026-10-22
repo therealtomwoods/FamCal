@@ -384,6 +384,10 @@ class PhotoMemoryCache {
           }
         }
 
+        // If all network + direct <img> methods failed for a Google photo, notify caller to refresh baseUrls
+        if (photo.baseUrl) {
+          onAuthExpired?.();
+        }
         this.markFailed(photoId);
         return null;
       } catch {
@@ -594,6 +598,8 @@ export function usePhotoCache(
   const [version, setVersion] = useState(0);
   const loadingIndicesRef = useRef<Set<number>>(new Set());
   const queueRunIdRef = useRef<number>(0);
+  const currentIndexRef = useRef<number>(currentIndex);
+  currentIndexRef.current = currentIndex;
 
   const photosLength = photos?.length || 0;
 
@@ -664,7 +670,7 @@ export function usePhotoCache(
       // 2. Scan forward and cache up to AHEAD_COUNT ready photos ahead of currentIndex
       let readyAhead = 0;
       let networkAttempts = 0;
-      const maxNetworkAttempts = Math.min(photosLength - 1, 12);
+      const maxNetworkAttempts = Math.min(photosLength - 1, 25);
 
       for (let offset = 1; offset < photosLength; offset++) {
         if (queueRunIdRef.current !== currentRunId) break;
@@ -694,6 +700,12 @@ export function usePhotoCache(
         const onDisk = await hasDiskCachedBlob(photo.id);
         if (!onDisk) {
           if (networkAttempts >= maxNetworkAttempts) {
+            onNeedBaseUrlRefresh?.();
+            // If we already have at least one ready photo ahead, stop scanning so we don't
+            // skip hundreds of unplayed photos to wrap back to earlier disk-cached slides.
+            if (readyAhead > 0) {
+              break;
+            }
             continue;
           }
           networkAttempts++;
@@ -705,7 +717,7 @@ export function usePhotoCache(
         }
 
         if (queueRunIdRef.current !== currentRunId) break;
-        await new Promise((resolve) => setTimeout(resolve, 30));
+        await new Promise((resolve) => setTimeout(resolve, 25));
       }
 
       if (queueRunIdRef.current === currentRunId) {
@@ -722,37 +734,60 @@ export function usePhotoCache(
     };
   }, [photos, currentIndex, token, photosLength, onNeedBaseUrlRefresh]);
 
-  // Background disk archiver: copies all available photos into persistent CacheStorage on disk
-  // so photos remain permanently playable across reloads and after Google's 7-day picker limit.
+  // Background parallel disk archiver:
+  // Copies all 1,000+ selected photos into persistent CacheStorage on disk using 4 concurrent workers,
+  // starting from currentIndex (rather than restarting at index 0) and triggering baseUrl refresh if URLs expire.
   useEffect(() => {
     if (photosLength === 0) return;
     let cancelled = false;
 
     const archiveRemainingToDisk = async () => {
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 1200));
+      if (cancelled) return;
 
-      for (let i = 0; i < photos.length; i++) {
-        if (cancelled) break;
-        const p = photos[i];
-        if (!p || !p.id || !p.baseUrl) continue;
-        if (p.url.startsWith('data:') || p.url.startsWith('blob:') || p.url.includes('unsplash.com')) continue;
+      const startIdx = currentIndexRef.current % photosLength;
+      let cursor = 0;
+      let consecutiveFailures = 0;
+      const CONCURRENCY = 4;
 
-        const alreadyOnDisk = await hasDiskCachedBlob(p.id);
-        if (alreadyOnDisk) continue;
+      const worker = async () => {
+        while (!cancelled && cursor < photosLength) {
+          const offset = cursor++;
+          const idx = (startIdx + offset) % photosLength;
+          const p = photos[idx];
+          if (!p || !p.id || !p.baseUrl) continue;
+          if (p.url.startsWith('data:') || p.url.startsWith('blob:') || p.url.includes('unsplash.com')) continue;
 
-        if (cancelled) break;
-        try {
-          const blob = await fetchPhotoBlobBytes(p, token || undefined);
-          if (blob && !cancelled) {
-            await putDiskCachedBlob(p.id, blob);
-            setVersion((v) => v + 1);
+          const alreadyOnDisk = await hasDiskCachedBlob(p.id);
+          if (alreadyOnDisk) continue;
+
+          if (cancelled) break;
+          try {
+            const blob = await fetchPhotoBlobBytes(p, token || undefined, onNeedBaseUrlRefresh);
+            if (blob && !cancelled) {
+              consecutiveFailures = 0;
+              await putDiskCachedBlob(p.id, blob);
+              setVersion((v) => v + 1);
+            } else {
+              consecutiveFailures++;
+              if (consecutiveFailures >= 8) {
+                onNeedBaseUrlRefresh?.();
+                // Pause briefly while fresh baseUrls are fetched
+                await new Promise((r) => setTimeout(r, 5000));
+                consecutiveFailures = 0;
+              }
+            }
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
-        }
 
-        await new Promise((r) => setTimeout(r, 200));
-      }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, photosLength) }, () => worker())
+      );
     };
 
     archiveRemainingToDisk();
@@ -760,7 +795,7 @@ export function usePhotoCache(
     return () => {
       cancelled = true;
     };
-  }, [photos, photosLength, token]);
+  }, [photos, photosLength, token, onNeedBaseUrlRefresh]);
 
   // Helper getters (depend on version so callers always see fresh cache state on re-render)
   const getPhotoSrc = useCallback(

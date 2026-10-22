@@ -64,6 +64,7 @@ interface GPhotosMediaSearchResponse {
       photo?: Record<string, unknown>;
     };
   }>;
+  nextPageToken?: string;
 }
 
 // Active Picker Session reference for manual check/cancel triggers
@@ -84,23 +85,44 @@ export async function loadPhotosFromIndexedDB(): Promise<PhotoItem[] | null> {
   return null;
 }
 
+const META_CACHE_NAME = 'famcal-photo-meta-v1';
+const META_CACHE_URL = 'https://famcal-cache.local/meta/picked-photos.json';
+
+function normalizeStoredPhotos(parsed: any[]): PhotoItem[] {
+  return parsed
+    .filter((p) => p && p.id && (p.baseUrl || p.url))
+    .map((p) => {
+      const cleanBase = p.baseUrl ? p.baseUrl.split('=')[0] : undefined;
+      return {
+        id: p.id,
+        url: cleanBase ? `${cleanBase}=w1200-h800` : p.url,
+        baseUrl: cleanBase || p.baseUrl,
+        filename: p.filename,
+        caption: p.caption,
+        dateTaken: p.dateTaken,
+        width: p.width,
+        height: p.height,
+      };
+    });
+}
+
 /**
- * Retrieve cached picked photos metadata from localStorage
+ * Retrieve cached picked photos metadata synchronously from localStorage
  */
 export function getStoredPickedPhotos(): PhotoItem[] {
   try {
     const raw = localStorage.getItem(PICKED_PHOTOS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? normalizeStoredPhotos(parsed) : [];
   } catch {
     return [];
   }
 }
 
 /**
- * Load stored photos metadata directly from localStorage without database overhead.
- * Cleans up legacy bloated IndexedDB databases from previous versions.
+ * Load stored photos metadata (checks high-capacity CacheStorage first so 1,000+ photos
+ * are never truncated by the 5MB localStorage limit, falling back to localStorage).
  */
 export async function loadStoredPhotos(): Promise<PhotoItem[]> {
   if (typeof indexedDB !== 'undefined') {
@@ -110,28 +132,73 @@ export async function loadStoredPhotos(): Promise<PhotoItem[]> {
       // ignore
     }
   }
-  return getStoredPickedPhotos();
+
+  const fromLocal = getStoredPickedPhotos();
+
+  if (typeof caches !== 'undefined') {
+    try {
+      const cache = await caches.open(META_CACHE_NAME);
+      const res = await cache.match(META_CACHE_URL);
+      if (res && res.ok) {
+        const parsed = await res.json();
+        if (Array.isArray(parsed)) {
+          const fromCache = normalizeStoredPhotos(parsed);
+          if (fromCache.length >= fromLocal.length) {
+            return fromCache;
+          }
+        }
+      }
+    } catch {
+      // fallback to localStorage
+    }
+  }
+
+  return fromLocal;
 }
 
 /**
- * Cache picked photos metadata in localStorage so slideshow runs seamlessly across reloads.
- * Strips huge base64 strings and temporary blob URLs so localStorage never exceeds quota.
+ * Cache picked photos metadata in both compact localStorage (omitting duplicate URL strings)
+ * and unlimited CacheStorage so 1,000–2,000+ photos never fail or truncate on quota limits.
  */
 export function saveStoredPickedPhotos(photos: PhotoItem[]): void {
+  const compact = photos.map((p) => {
+    const cleanBase = p.baseUrl ? p.baseUrl.split('=')[0] : undefined;
+    const entry: Record<string, any> = { id: p.id };
+    if (cleanBase) {
+      entry.baseUrl = cleanBase;
+    } else if (p.url && !p.url.startsWith('data:') && !p.url.startsWith('blob:')) {
+      entry.url = p.url;
+    }
+    if (p.filename) entry.filename = p.filename;
+    if (p.caption) entry.caption = p.caption;
+    if (p.dateTaken) entry.dateTaken = p.dateTaken;
+    if (p.width) entry.width = p.width;
+    if (p.height) entry.height = p.height;
+    return entry;
+  });
+
+  const serialized = JSON.stringify(compact);
+
+  // 1. Save to high-capacity CacheStorage (never constrained by 5MB localStorage limit)
+  if (typeof caches !== 'undefined') {
+    caches
+      .open(META_CACHE_NAME)
+      .then((cache) =>
+        cache.put(
+          META_CACHE_URL,
+          new Response(serialized, {
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      )
+      .catch(() => {});
+  }
+
+  // 2. Save compact representation to localStorage for synchronous startup
   try {
-    const lightweight = photos.map((p) => ({
-      id: p.id,
-      url: p.baseUrl || (p.url.startsWith('data:') || p.url.startsWith('blob:') ? '' : p.url),
-      baseUrl: p.baseUrl,
-      filename: p.filename,
-      caption: p.caption,
-      dateTaken: p.dateTaken,
-      width: p.width,
-      height: p.height,
-    }));
-    localStorage.setItem(PICKED_PHOTOS_KEY, JSON.stringify(lightweight));
+    localStorage.setItem(PICKED_PHOTOS_KEY, serialized);
   } catch (err) {
-    console.warn('Failed to save picked photos to localStorage:', err);
+    console.warn('localStorage quota reached for picked photos; using CacheStorage for full list:', err);
   }
 }
 
@@ -142,6 +209,8 @@ export function clearStoredPickedPhotos(token?: string | null): void {
   localStorage.removeItem(PICKED_PHOTOS_KEY);
   localStorage.removeItem('famcal_photos_fetched_at');
   localStorage.removeItem('famcal_picker_session_expired');
+  localStorage.removeItem('famcal_shuffled_deck_v1');
+  localStorage.removeItem('famcal_slideshow_cursor_v1');
   const sessionId = localStorage.getItem('famcal_picker_session_id');
   if (sessionId) {
     localStorage.removeItem('famcal_picker_session_id');
@@ -159,6 +228,8 @@ export function clearStoredPickedPhotos(token?: string | null): void {
   if (typeof caches !== 'undefined') {
     try {
       caches.delete('famcal-photo-blobs-v1').catch(() => {});
+      caches.delete('famcal-photo-blobs-v2').catch(() => {});
+      caches.delete(META_CACHE_NAME).catch(() => {});
     } catch {
       // ignore
     }
@@ -300,14 +371,30 @@ export async function createGooglePhotosPickerSession(token: string): Promise<Pi
     localStorage.removeItem('famcal_picker_session_id');
   }
 
-  const res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
+  let res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify({
+      pickingConfig: {
+        maxItemCount: '2000',
+      },
+    }),
   });
+
+  // Fallback if API version rejects pickingConfig payload
+  if (res.status === 400) {
+    res = await fetch('https://photospicker.googleapis.com/v1/sessions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+  }
 
   if (!res.ok) {
     const errText = await res.text();
@@ -351,52 +438,58 @@ export async function checkPickerSessionStatus(token: string, sessionId: string)
 }
 
 function mapPickerItems(items: Array<PickerMediaItem | Record<string, any>>): PhotoItem[] {
-  return items
-    .filter((item) => item.mediaFile?.baseUrl || (item as any).baseUrl)
-    .map((item) => {
-      const baseUrl = item.mediaFile?.baseUrl || (item as any).baseUrl;
-      const filename = item.mediaFile?.filename || (item as any).filename || 'Family Photo';
-      const width = item.mediaFile?.mediaFileMetadata?.width || (item as any).width;
-      const height = item.mediaFile?.mediaFileMetadata?.height || (item as any).height;
+  const seen = new Set<string>();
+  const result: PhotoItem[] = [];
 
-      const rawDate =
-        item.createTime ||
-        (item as any).mediaMetadata?.creationTime ||
-        (item as any).mediaFile?.createTime;
+  for (const item of items) {
+    const baseUrl = item.mediaFile?.baseUrl || (item as any).baseUrl;
+    if (!baseUrl || !item.id || seen.has(item.id)) continue;
+    seen.add(item.id);
 
-      let dateTaken: string | undefined;
-      if (rawDate) {
-        try {
-          const d = new Date(rawDate);
-          if (!isNaN(d.getTime())) {
-            dateTaken = d.toLocaleDateString(undefined, {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            });
-          }
-        } catch {
-          dateTaken = rawDate;
+    const filename = item.mediaFile?.filename || (item as any).filename || 'Family Photo';
+    const width = item.mediaFile?.mediaFileMetadata?.width || (item as any).width;
+    const height = item.mediaFile?.mediaFileMetadata?.height || (item as any).height;
+
+    const rawDate =
+      item.createTime ||
+      (item as any).mediaMetadata?.creationTime ||
+      (item as any).mediaFile?.createTime;
+
+    let dateTaken: string | undefined;
+    if (rawDate) {
+      try {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) {
+          dateTaken = d.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
         }
+      } catch {
+        dateTaken = rawDate;
       }
+    }
 
-      return {
-        id: item.id,
-        url: `${baseUrl}=w1200-h800`,
-        baseUrl: baseUrl,
-        filename: filename,
-        caption: undefined,
-        dateTaken: dateTaken,
-        width: typeof width === 'number' ? width : undefined,
-        height: typeof height === 'number' ? height : undefined,
-      };
+    result.push({
+      id: item.id,
+      url: `${baseUrl}=w1200-h800`,
+      baseUrl: baseUrl,
+      filename: filename,
+      caption: undefined,
+      dateTaken: dateTaken,
+      width: typeof width === 'number' ? width : undefined,
+      height: typeof height === 'number' ? height : undefined,
     });
+  }
+
+  return result;
 }
 
 /**
  * 3. Fetch media items selected by the user in the picker session.
- * Automatically paginates through all pages using nextPageToken so all selected photos
- * (hundreds or thousands) are completely retrieved.
+ * Automatically paginates through all pages using nextPageToken with automatic retry
+ * on rate limits or transient network hiccups so 1,000–2,000+ selected photos are completely retrieved.
  * GET https://photospicker.googleapis.com/v1/mediaItems?sessionId={sessionId}&pageSize=100&pageToken={token}
  */
 export async function fetchPickerSelectedMediaItems(token: string, sessionId: string): Promise<PhotoItem[]> {
@@ -404,8 +497,10 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
   const cleanId = sessionId.replace(/^sessions\//, '');
   const allRawItems: PickerMediaItem[] = [];
   let pageToken: string | undefined = undefined;
+  let pageCount = 0;
 
-  while (true) {
+  while (pageCount < 50) {
+    pageCount++;
     const baseUrlStr = 'https://photospicker.googleapis.com/v1/mediaItems';
     const params = new URLSearchParams();
     params.set('sessionId', cleanId);
@@ -414,44 +509,62 @@ export async function fetchPickerSelectedMediaItems(token: string, sessionId: st
       params.set('pageToken', pageToken);
     }
 
-    try {
-      const res = await fetch(`${baseUrlStr}?${params.toString()}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+    let pageData: { mediaItems?: PickerMediaItem[]; nextPageToken?: string } | null = null;
 
-      if (!res.ok) {
-        const errText = await res.text();
-        console.warn(`Picker mediaItems fetch error (status ${res.status}):`, errText);
-        if (res.status === 401 || res.status === 403) {
-          throw new Error('UNAUTHORIZED_TOKEN_EXPIRED');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`${baseUrlStr}?${params.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          console.warn(`Picker mediaItems fetch error (page ${pageCount}, attempt ${attempt + 1}, status ${res.status}):`, errText);
+          if (res.status === 401 || res.status === 403) {
+            throw new Error('UNAUTHORIZED_TOKEN_EXPIRED');
+          }
+          if (res.status === 404 || res.status === 410) {
+            throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
+          }
+          if (res.status === 400 && pageCount === 1) {
+            throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
+          }
+          // Transient 429 / 5xx: wait and retry this page
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          continue;
         }
-        if (res.status === 404 || res.status === 410 || res.status === 400) {
-          throw new Error(`PICKER_SESSION_EXPIRED (${res.status})`);
-        }
+
+        pageData = await res.json();
         break;
+      } catch (fetchErr: any) {
+        if (fetchErr?.message?.includes('UNAUTHORIZED') || fetchErr?.message?.includes('PICKER_SESSION_EXPIRED')) {
+          throw fetchErr;
+        }
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        } else {
+          console.warn('Network error during picker mediaItems pagination:', fetchErr);
+        }
       }
+    }
 
-      const data: { mediaItems?: PickerMediaItem[]; nextPageToken?: string } = await res.json();
-      if (data.mediaItems && data.mediaItems.length > 0) {
-        allRawItems.push(...data.mediaItems);
-      }
-
-      pageToken = data.nextPageToken;
-      if (!pageToken) {
-        break; // All pages traversed
-      }
-    } catch (fetchErr: any) {
-      if (fetchErr?.message?.includes('UNAUTHORIZED') || fetchErr?.message?.includes('PICKER_SESSION_EXPIRED')) {
-        throw fetchErr;
-      }
-      console.warn('Network error during picker mediaItems pagination:', fetchErr);
+    if (!pageData) {
       break;
+    }
+
+    if (pageData.mediaItems && pageData.mediaItems.length > 0) {
+      allRawItems.push(...pageData.mediaItems);
+    }
+
+    pageToken = pageData.nextPageToken;
+    if (!pageToken) {
+      break; // All pages traversed
     }
   }
 
-  console.log(`Fetched total ${allRawItems.length} selected items from Google Photos Picker`);
+  console.log(`Fetched total ${allRawItems.length} selected items across ${pageCount} page(s) from Google Photos Picker`);
   return mapPickerItems(allRawItems);
 }
 
@@ -890,14 +1003,24 @@ export async function fetchAlbumPhotos(token: string, albumId: string): Promise<
   // Handle "All Recent Photos from Library"
   if (albumId === 'ALL_LIBRARY_PHOTOS' && token) {
     try {
-      const res = await fetch('https://photoslibrary.googleapis.com/v1/mediaItems?pageSize=50', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
+      const allItems: NonNullable<GPhotosMediaSearchResponse['mediaItems']> = [];
+      let pageToken: string | undefined = undefined;
+      for (let page = 0; page < 20; page++) {
+        const params = new URLSearchParams({ pageSize: '100' });
+        if (pageToken) params.set('pageToken', pageToken);
+        const res = await fetch(`https://photoslibrary.googleapis.com/v1/mediaItems?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) break;
         const data: GPhotosMediaSearchResponse = await res.json();
         if (data.mediaItems && data.mediaItems.length > 0) {
-          return mapMediaItemsToPhotos(data.mediaItems);
+          allItems.push(...data.mediaItems);
         }
+        pageToken = data.nextPageToken;
+        if (!pageToken) break;
+      }
+      if (allItems.length > 0) {
+        return mapMediaItemsToPhotos(allItems);
       }
     } catch (err) {
       console.warn('Failed to fetch library media items:', err);
@@ -907,23 +1030,33 @@ export async function fetchAlbumPhotos(token: string, albumId: string): Promise<
   // Fetch photos from specific legacy album if valid
   if (token && albumId && albumId !== 'album-family-vacation' && albumId !== 'PICKED_GOOGLE_PHOTOS') {
     try {
-      const res = await fetch('https://photoslibrary.googleapis.com/v1/mediaItems:search', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          albumId,
-          pageSize: 50,
-        }),
-      });
+      const allItems: NonNullable<GPhotosMediaSearchResponse['mediaItems']> = [];
+      let pageToken: string | undefined = undefined;
+      for (let page = 0; page < 20; page++) {
+        const res = await fetch('https://photoslibrary.googleapis.com/v1/mediaItems:search', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            albumId,
+            pageSize: 100,
+            ...(pageToken ? { pageToken } : {}),
+          }),
+        });
 
-      if (res.ok) {
+        if (!res.ok) break;
         const data: GPhotosMediaSearchResponse = await res.json();
         if (data.mediaItems && data.mediaItems.length > 0) {
-          return mapMediaItemsToPhotos(data.mediaItems);
+          allItems.push(...data.mediaItems);
         }
+        pageToken = data.nextPageToken;
+        if (!pageToken) break;
+      }
+
+      if (allItems.length > 0) {
+        return mapMediaItemsToPhotos(allItems);
       }
     } catch (error) {
       console.error('Failed to search album media items:', error);
