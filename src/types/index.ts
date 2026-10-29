@@ -89,6 +89,7 @@ export interface NestThermostatState {
 
 export interface AppSettings {
   googleClientId: string;
+  googleClientSecret?: string;
   selectedCalendarIds: string[];
   selectedAlbumId: string;
   selectedAlbumName: string;

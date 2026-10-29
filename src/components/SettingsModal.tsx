@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { AppSettings, PhotoAlbum } from '../types';
-import { UserProfile } from '../services/googleAuth';
+import {
+  UserProfile,
+  hasStoredRefreshToken,
+  getStoredClientSecret,
+} from '../services/googleAuth';
 import {
   X,
   LogIn,
@@ -31,7 +35,7 @@ interface SettingsModalProps {
   onUpdateSettings: (newSettings: Partial<AppSettings>) => void;
   userToken?: string | null;
   userProfile: UserProfile | null;
-  onConnectGoogle: () => void;
+  onConnectGoogle: (overrideClientId?: string, overrideClientSecret?: string) => void;
   onDisconnectGoogle: () => void;
   albums: PhotoAlbum[];
   onSelectAlbum: (album: PhotoAlbum) => void;
@@ -68,6 +72,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isSessionExpired = false,
 }) => {
   const [clientIdInput, setClientIdInput] = useState(settings.googleClientId || '');
+  const [clientSecretInput, setClientSecretInput] = useState(
+    settings.googleClientSecret || getStoredClientSecret() || ''
+  );
   const [stockSymbolInput, setStockSymbolInput] = useState(settings.monitoredStock || 'SPY');
   const [agendaTitleInput, setAgendaTitleInput] = useState(settings.familyAgendaTitle || 'Family Agenda');
   const [weatherLocationInput, setWeatherLocationInput] = useState(settings.weatherLocation || 'Elora, Ontario');
@@ -194,6 +201,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSaveAll = () => {
     onUpdateSettings({
       googleClientId: clientIdInput.trim(),
+      googleClientSecret: clientSecretInput.trim(),
       monitoredStock: stockSymbolInput.trim().toUpperCase() || 'SPY',
       familyAgendaTitle: agendaTitleInput.trim() || 'Family Agenda',
       weatherApiKey: weatherApiKeyInput.trim(),
@@ -210,6 +218,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setStockSymbolInput(symbol);
     onUpdateSettings({ monitoredStock: symbol });
   };
+
+  const isRefreshTokenActive = hasStoredRefreshToken();
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
@@ -276,28 +286,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* ========================================================================= */}
           {activeTab === 'google' && (
             <div className="space-y-4">
-              {/* Google Client ID Config */}
-              <div className="space-y-2 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
-                <label className="text-xs font-bold text-white flex items-center gap-1.5">
-                  <Shield className="w-4 h-4 text-blue-400" />
-                  Google OAuth Client ID
-                </label>
-                <div className="flex gap-2">
+              {/* Google Client ID & Client Secret Config */}
+              <div className="space-y-3 p-3.5 rounded-xl bg-slate-800/60 border border-white/5">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-blue-400" />
+                    Google OAuth Client ID
+                  </label>
                   <input
                     type="text"
                     value={clientIdInput}
                     onChange={(e) => setClientIdInput(e.target.value)}
                     placeholder="xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com"
-                    className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
                   />
-                  <button
-                    onClick={handleSaveAll}
-                    className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    Save
-                  </button>
                 </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Shield className="w-4 h-4 text-emerald-400" />
+                      Google OAuth Client Secret
+                      <span className="text-[10px] font-normal text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                        Enables Permanent Refresh Token
+                      </span>
+                    </label>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={clientSecretInput}
+                      onChange={(e) => setClientSecretInput(e.target.value)}
+                      placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                      className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-white/10 text-white text-xs focus:ring-1 focus:ring-blue-500 font-mono"
+                    />
+                    <button
+                      onClick={handleSaveAll}
+                      className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Save
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Found in Google Cloud Console → Credentials → your Web OAuth Client. Allows silent background token renewal without popups.
+                  </p>
+                </div>
+
                 {showSavedToast && (
                   <p className="text-xs text-emerald-400 font-semibold animate-pulse">
                     ✓ Settings saved!
@@ -335,15 +370,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
 
-                  {/* Re-authenticate button to refresh token with newly enabled scopes */}
+                  {/* Token Persistence Status Badge */}
+                  <div
+                    className={`p-2.5 rounded-lg text-xs flex items-center justify-between gap-2 ${
+                      isRefreshTokenActive
+                        ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-200'
+                        : 'bg-amber-950/60 border border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {isRefreshTokenActive ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                      )}
+                      <span>
+                        {isRefreshTokenActive
+                          ? 'Permanent Refresh Token Active (Auto-renews silently in background)'
+                          : '1-Hour Session Token Only — Enter Client Secret above & click Upgrade'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Re-authenticate / Upgrade button */}
                   <div className="pt-2 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs text-slate-300">Need to update permissions?</span>
+                    <span className="text-xs text-slate-300">
+                      {isRefreshTokenActive ? 'Need to update permissions?' : 'Enable permanent background token:'}
+                    </span>
                     <button
-                      onClick={onConnectGoogle}
-                      className="px-3 py-1 rounded-lg bg-blue-600/40 hover:bg-blue-600 border border-blue-400/40 text-blue-200 text-xs font-semibold transition flex items-center gap-1.5"
+                      onClick={() => onConnectGoogle(clientIdInput, clientSecretInput)}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 border border-blue-400/40 text-white text-xs font-bold transition flex items-center gap-1.5 shadow"
                     >
                       <RefreshCw className="w-3 h-3" />
-                      Re-Authorize Google Permissions
+                      {isRefreshTokenActive ? 'Re-Authorize Google Permissions' : 'Upgrade to Permanent Token'}
                     </button>
                   </div>
                 </div>
@@ -353,7 +412,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     Connect your Google Account to synchronize Google Calendars and Google Photos.
                   </p>
                   <button
-                    onClick={onConnectGoogle}
+                    onClick={() => onConnectGoogle(clientIdInput, clientSecretInput)}
                     className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2"
                   >
                     <LogIn className="w-4 h-4" />
@@ -546,9 +605,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="space-y-1 text-slate-300">
-                  <p className="font-semibold text-white">4. Add Test Users</p>
+                  <p className="font-semibold text-white">4. Publish App to Prevent 7-Day Token Expiry</p>
                   <p className="text-slate-400 pl-2">
-                    In <strong>OAuth consent screen → Test users</strong>, add your personal Google email address so your login has full access while the app is in testing mode.
+                    In <strong>OAuth consent screen → Publishing status</strong>, click <strong>"Publish App"</strong> so status is <strong>"In production"</strong> (otherwise Google forces a 7-day expiration on all tokens in Testing mode). You do <em>not</em> need to submit for Google review—just click <em>Advanced → Go to FamCal (unsafe)</em> once when signing in.
                   </p>
                 </div>
               </div>

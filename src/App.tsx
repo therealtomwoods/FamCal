@@ -23,6 +23,8 @@ import {
   isTokenExpired,
   requestSilentTokenRefresh,
   ensureValidAccessToken,
+  hasStoredRefreshToken,
+  setStoredClientSecret,
 } from './services/googleAuth';
 import {
   fetchUserCalendars,
@@ -62,6 +64,7 @@ const SETTINGS_KEY = 'famcal_user_settings';
 
 const DEFAULT_SETTINGS: AppSettings = {
   googleClientId: '',
+  googleClientSecret: '',
   selectedCalendarIds: ['primary', 'cal-kids-sports', 'cal-school', 'cal-mom', 'cal-dad'],
   selectedAlbumId: 'ALL_LIBRARY_PHOTOS',
   selectedAlbumName: '📸 All Recent Google Photos',
@@ -136,6 +139,9 @@ export const App: React.FC = () => {
     setSettings((prev) => {
       const updated = { ...prev, ...newPartial };
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+      if (newPartial.googleClientSecret !== undefined) {
+        setStoredClientSecret(newPartial.googleClientSecret);
+      }
       return updated;
     });
   };
@@ -222,7 +228,7 @@ export const App: React.FC = () => {
 
   // 1. Proactive Google OAuth Token Silent Renewal (runs on startup if expired, and checks every 15 minutes)
   useEffect(() => {
-    if (!settings.googleClientId || settings.isDemoMode || !userToken) return;
+    if (!settings.googleClientId || settings.isDemoMode || (!userToken && !hasStoredRefreshToken())) return;
 
     const renewTokenIfNeeded = async () => {
       if (isTokenExpired(600000)) {
@@ -232,7 +238,8 @@ export const App: React.FC = () => {
           (newToken, newProfile) => {
             setUserToken(newToken);
             if (newProfile) setUserProfile(newProfile);
-          }
+          },
+          settings.googleClientSecret
         );
         if (fresh) {
           setUserToken(fresh);
@@ -243,7 +250,7 @@ export const App: React.FC = () => {
     renewTokenIfNeeded();
     const interval = setInterval(renewTokenIfNeeded, 15 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [settings.googleClientId, settings.isDemoMode, userToken]);
+  }, [settings.googleClientId, settings.googleClientSecret, settings.isDemoMode, userToken]);
 
   // Proactive background photo baseUrl check (every minute heartbeat, refreshes when older than 25 minutes)
   useEffect(() => {
@@ -617,13 +624,27 @@ export const App: React.FC = () => {
   };
 
   // Handle Google Auth Connect
-  const handleConnectGoogle = () => {
-    if (!settings.googleClientId) {
+  const handleConnectGoogle = (overrideClientId?: string, overrideClientSecret?: string) => {
+    const resolvedClientId = (overrideClientId ?? settings.googleClientId).trim();
+    const resolvedClientSecret = (overrideClientSecret ?? settings.googleClientSecret ?? '').trim();
+
+    if (!resolvedClientId) {
       alert('Please enter your Google OAuth Client ID first in Settings.');
       return;
     }
+
+    if (
+      resolvedClientId !== settings.googleClientId ||
+      resolvedClientSecret !== (settings.googleClientSecret ?? '')
+    ) {
+      updateSettings({
+        googleClientId: resolvedClientId,
+        googleClientSecret: resolvedClientSecret,
+      });
+    }
+
     triggerGoogleSignIn(
-      settings.googleClientId,
+      resolvedClientId,
       (token, baselineProfile) => {
         setUserToken(token);
         if (baselineProfile) {
@@ -633,7 +654,8 @@ export const App: React.FC = () => {
       },
       (fullProfile) => {
         setUserProfile(fullProfile);
-      }
+      },
+      resolvedClientSecret
     );
   };
 
