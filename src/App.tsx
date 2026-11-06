@@ -85,6 +85,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   militaryTime: false,
   familyAgendaTitle: 'Woods Agenda',
   screenMode: 'vertical',
+  autoScrollCalendar: true,
 };
 
 export const App: React.FC = () => {
@@ -804,6 +805,10 @@ export const App: React.FC = () => {
             showWeather={settings.showWeather}
             showStockTicker={settings.showStockTicker}
             weatherUnits={settings.weatherUnits}
+            autoScroll={settings.autoScrollCalendar ?? true}
+            onToggleAutoScroll={() =>
+              updateSettings({ autoScrollCalendar: !(settings.autoScrollCalendar ?? true) })
+            }
           />
         </div>
 

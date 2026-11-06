@@ -111,4 +111,5 @@ export interface AppSettings {
   militaryTime: boolean;
   familyAgendaTitle?: string; // Customizable title for the agenda ribbon e.g. "Family Agenda"
   screenMode?: 'vertical' | 'horizontal'; // Orientation layout: 1-col vertical vs 4-col horizontal
+  autoScrollCalendar?: boolean; // Automatically scroll calendar upwards over ~6s and reset to top
 }

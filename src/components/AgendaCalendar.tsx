@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CalendarEvent, CalendarInfo, WeatherData, StockItem } from '../types';
 import { EventCard } from './EventCard';
 import { WeatherWidget, renderWeatherIcon } from './WeatherWidget';
 import { StockTickerWidget } from './StockTickerWidget';
-import { Calendar as CalendarIcon, Filter, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar as CalendarIcon, Filter, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown } from 'lucide-react';
 
 interface AgendaCalendarProps {
   events: CalendarEvent[];
@@ -21,6 +21,9 @@ interface AgendaCalendarProps {
   weatherUnits?: 'F' | 'C';
   // 4-Column Horizontal Screen Mode
   isFourColumnMode?: boolean;
+  // Auto-scroll calendar upwards over ~6s and reset to top
+  autoScroll?: boolean;
+  onToggleAutoScroll?: () => void;
 }
 
 export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
@@ -37,11 +40,87 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   showStockTicker = true,
   weatherUnits = 'F',
   isFourColumnMode = false,
+  autoScroll = true,
+  onToggleAutoScroll,
 }) => {
   // Live current time tracker (auto-refreshes every 15s and on wake/focus so past events & days drop off immediately)
   const [currentTime, setCurrentTime] = useState(() => new Date());
   // 4-Column mode pagination offset (0 = today to today+3, 4 = today+4 to today+7, etc.)
   const [pageOffset, setPageOffset] = useState<number>(0);
+
+  // Refs for 6-second continuous upward auto-scroll
+  const verticalScrollRef = useRef<HTMLDivElement | null>(null);
+  const columnScrollRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const userInteractionPauseUntilRef = useRef<number>(0);
+
+  // 6-second upward auto-scroll loop (scrolls from top to bottom in 6000ms, reverts to top, and repeats)
+  useEffect(() => {
+    if (!autoScroll || isLoading) return;
+
+    const SCROLL_DURATION_MS = 6000; // 6 seconds to complete scroll from top to bottom
+    const TOP_PAUSE_MS = 1000; // brief pause at top before starting scroll
+    const BOTTOM_PAUSE_MS = 1000; // brief pause at bottom before reverting to top
+
+    let rafId: number;
+    let cycleStartTime = performance.now();
+
+    const getScrollTargets = (): HTMLDivElement[] => {
+      if (isFourColumnMode) {
+        return columnScrollRefs.current.filter(
+          (el): el is HTMLDivElement => Boolean(el && el.scrollHeight - el.clientHeight > 4)
+        );
+      }
+      const el = verticalScrollRef.current;
+      return el && el.scrollHeight - el.clientHeight > 4 ? [el] : [];
+    };
+
+    const step = (now: number) => {
+      if (Date.now() < userInteractionPauseUntilRef.current) {
+        cycleStartTime = now;
+        rafId = requestAnimationFrame(step);
+        return;
+      }
+
+      const targets = getScrollTargets();
+      if (targets.length === 0) {
+        cycleStartTime = now;
+        rafId = requestAnimationFrame(step);
+        return;
+      }
+
+      const totalCycleMs = TOP_PAUSE_MS + SCROLL_DURATION_MS + BOTTOM_PAUSE_MS;
+      const elapsed = (now - cycleStartTime) % totalCycleMs;
+
+      targets.forEach((el) => {
+        const maxScroll = el.scrollHeight - el.clientHeight;
+        if (maxScroll <= 0) return;
+
+        if (elapsed < TOP_PAUSE_MS) {
+          // At top waiting to start scroll
+          if (el.scrollTop !== 0) {
+            el.scrollTop = 0;
+          }
+        } else if (elapsed < TOP_PAUSE_MS + SCROLL_DURATION_MS) {
+          // Scrolling upwards (increasing scrollTop from 0 to maxScroll over 6 seconds)
+          const progress = (elapsed - TOP_PAUSE_MS) / SCROLL_DURATION_MS;
+          el.scrollTop = progress * maxScroll;
+        } else {
+          // Hold at bottom briefly before reverting to top on next cycle wrap
+          el.scrollTop = maxScroll;
+        }
+      });
+
+      rafId = requestAnimationFrame(step);
+    };
+
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
+  }, [autoScroll, isLoading, isFourColumnMode, events.length, pageOffset]);
+
+  const handleUserScrollInteraction = () => {
+    // Pause auto-scroll for 4 seconds if user manually touches or wheels the calendar
+    userInteractionPauseUntilRef.current = Date.now() + 4000;
+  };
 
   useEffect(() => {
     const updateNow = () => setCurrentTime(new Date());
@@ -219,18 +298,35 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
             )}
           </div>
 
-          {/* Right: Calendars Filter Button */}
-          <button
-            onClick={onOpenCalendarFilter}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-xs sm:text-sm font-semibold text-white transition shadow-sm flex-shrink-0"
-            title="Filter Active Calendars"
-          >
-            <Filter className="w-4 h-4 text-blue-400" />
-            <span className="hidden sm:inline">Calendars</span>
-            <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-xs font-bold">
-              {activeCalendars.length}
-            </span>
-          </button>
+          {/* Right: Auto-Scroll Toggle & Calendars Filter Button */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {onToggleAutoScroll && (
+              <button
+                onClick={onToggleAutoScroll}
+                className={`flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-xs font-semibold transition shadow-sm ${
+                  autoScroll
+                    ? 'bg-blue-600/20 border-blue-500/40 text-blue-300 hover:bg-blue-600/30'
+                    : 'bg-slate-800 hover:bg-slate-700 border-white/15 text-slate-400 hover:text-white'
+                }`}
+                title={autoScroll ? 'Auto-Scroll Active (6s loop) — Click to Pause' : 'Auto-Scroll Paused — Click to Resume'}
+              >
+                <ChevronsUpDown className={`w-4 h-4 ${autoScroll ? 'text-blue-400 animate-pulse' : 'text-slate-400'}`} />
+                <span className="hidden md:inline">{autoScroll ? 'Auto-Scroll' : 'Scroll Off'}</span>
+              </button>
+            )}
+
+            <button
+              onClick={onOpenCalendarFilter}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 text-xs sm:text-sm font-semibold text-white transition shadow-sm flex-shrink-0"
+              title="Filter Active Calendars"
+            >
+              <Filter className="w-4 h-4 text-blue-400" />
+              <span className="hidden sm:inline">Calendars</span>
+              <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-xs font-bold">
+                {activeCalendars.length}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -260,7 +356,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-4 gap-2.5 sm:gap-3 h-full min-h-0">
-              {fourColumnDays.map(({ key }) => {
+              {fourColumnDays.map(({ key }, colIdx) => {
                 const dayEvents = groupedEvents[key] || [];
                 const { dayNumber, label, weekdayShort, dateFormatted, isToday } =
                   formatHeaderDate(key);
@@ -347,7 +443,15 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
                     </div>
 
                     {/* Events Scroll Area for this Day Column */}
-                    <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 no-scrollbar">
+                    <div
+                      ref={(el) => {
+                        columnScrollRefs.current[colIdx] = el;
+                      }}
+                      onWheel={handleUserScrollInteraction}
+                      onTouchStart={handleUserScrollInteraction}
+                      onTouchMove={handleUserScrollInteraction}
+                      className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2 no-scrollbar"
+                    >
                       {dayEvents.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full py-8 text-center text-slate-600">
                           <p className="text-xs font-medium italic">
@@ -373,7 +477,13 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
         </div>
       ) : (
         /* Vertical Agenda Scroll Area */
-        <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black">
+        <div
+          ref={verticalScrollRef}
+          onWheel={handleUserScrollInteraction}
+          onTouchStart={handleUserScrollInteraction}
+          onTouchMove={handleUserScrollInteraction}
+          className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black"
+        >
           {isLoading ? (
             <div className="flex flex-col items-center justify-center py-16 text-slate-400">
               <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
