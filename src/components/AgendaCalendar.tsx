@@ -38,17 +38,31 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   weatherUnits = 'F',
   isFourColumnMode = false,
 }) => {
-  // Live current time tracker (auto-refreshes every 30s so past events drop off in real time)
+  // Live current time tracker (auto-refreshes every 15s and on wake/focus so past events & days drop off immediately)
   const [currentTime, setCurrentTime] = useState(() => new Date());
   // 4-Column mode pagination offset (0 = today to today+3, 4 = today+4 to today+7, etc.)
   const [pageOffset, setPageOffset] = useState<number>(0);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 30000);
-    return () => clearInterval(timer);
+    const updateNow = () => setCurrentTime(new Date());
+    const timer = setInterval(updateNow, 15000);
+    window.addEventListener('focus', updateNow);
+    document.addEventListener('visibilitychange', updateNow);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', updateNow);
+      document.removeEventListener('visibilitychange', updateNow);
+    };
   }, []);
+
+  const todayKey = `${currentTime.getFullYear()}-${String(currentTime.getMonth() + 1).padStart(2, '0')}-${String(
+    currentTime.getDate()
+  ).padStart(2, '0')}`;
+
+  // Automatically reset 4-column pagination to Today (0) whenever the calendar day rolls over at midnight
+  useEffect(() => {
+    setPageOffset(0);
+  }, [todayKey]);
 
   // Four columns: Day 0, Day 1, Day 2, Day 3 relative to currentTime + pageOffset days
   const fourColumnDays = Array.from({ length: 4 }).map((_, i) => {
@@ -61,12 +75,8 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     return { date: d, key };
   });
 
-  // Group events by day key (YYYY-MM-DD), filtering out any events whose start time has already passed
+  // Group events by day key (YYYY-MM-DD), filtering out any events from yesterday or whose start time has already passed
   const groupedEvents: Record<string, CalendarEvent[]> = {};
-
-  const todayKey = `${currentTime.getFullYear()}-${String(currentTime.getMonth() + 1).padStart(2, '0')}-${String(
-    currentTime.getDate()
-  ).padStart(2, '0')}`;
 
   const tomorrow = new Date(currentTime);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -76,7 +86,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   )}-${String(tomorrow.getDate()).padStart(2, '0')}`;
 
   events.forEach((event) => {
-    // If an event start time is before the current time of day, do not show it (it has passed, only show future events)
+    // If an event has already ended (all-day) or its start time has passed (timed), do not show it
     const isPast = event.allDay
       ? event.end.getTime() < currentTime.getTime()
       : event.start.getTime() < currentTime.getTime();
@@ -85,10 +95,13 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
       return;
     }
 
-    const key = `${event.start.getFullYear()}-${String(event.start.getMonth() + 1).padStart(
+    const rawKey = `${event.start.getFullYear()}-${String(event.start.getMonth() + 1).padStart(
       2,
       '0'
     )}-${String(event.start.getDate()).padStart(2, '0')}`;
+
+    // If a multi-day event started before today and is still ongoing today, group it under todayKey (never show yesterday)
+    const key = rawKey < todayKey ? todayKey : rawKey;
 
     if (!groupedEvents[key]) {
       groupedEvents[key] = [];
@@ -99,7 +112,9 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   if (!groupedEvents[todayKey]) groupedEvents[todayKey] = [];
   if (!groupedEvents[tomorrowKey]) groupedEvents[tomorrowKey] = [];
 
-  const sortedDateKeys = Object.keys(groupedEvents).sort();
+  const sortedDateKeys = Object.keys(groupedEvents)
+    .filter((k) => k >= todayKey)
+    .sort();
 
   const formatHeaderDate = (dateKey: string) => {
     const [year, month, day] = dateKey.split('-').map(Number);

@@ -118,57 +118,60 @@ export async function fetchCalendarEvents(
     const data = await res.json();
     const items: GCalEventItem[] = data.items || [];
 
-    return items.map((item) => {
-      const isAllDay = !!item.start?.date && !item.start?.dateTime;
-      
-      let startDate: Date;
-      let endDate: Date;
+    return items
+      .map((item) => {
+        const isAllDay = !!item.start?.date && !item.start?.dateTime;
 
-      if (isAllDay && item.start?.date) {
-        // Date strings are YYYY-MM-DD
-        const [sYear, sMonth, sDay] = item.start.date.split('-').map(Number);
-        startDate = new Date(sYear, sMonth - 1, sDay, 0, 0, 0);
+        let startDate: Date;
+        let endDate: Date;
 
-        if (item.end?.date) {
-          const [eYear, eMonth, eDay] = item.end.date.split('-').map(Number);
-          // End date for all-day events in Google Calendar is exclusive, so subtract 1 minute
-          endDate = new Date(eYear, eMonth - 1, eDay, 23, 59, 59);
+        if (isAllDay && item.start?.date) {
+          // Date strings are YYYY-MM-DD
+          const [sYear, sMonth, sDay] = item.start.date.split('-').map(Number);
+          startDate = new Date(sYear, sMonth - 1, sDay, 0, 0, 0);
+
+          if (item.end?.date) {
+            const [eYear, eMonth, eDay] = item.end.date.split('-').map(Number);
+            // End date for all-day events in Google Calendar is exclusive (the day after the event ends),
+            // so subtract 1 day from eDay to get 23:59:59 on the actual final day of the event.
+            endDate = new Date(eYear, eMonth - 1, eDay - 1, 23, 59, 59);
+          } else {
+            endDate = new Date(sYear, sMonth - 1, sDay, 23, 59, 59);
+          }
         } else {
-          endDate = new Date(sYear, sMonth - 1, sDay, 23, 59, 59);
+          startDate = new Date(item.start?.dateTime || new Date());
+          endDate = new Date(item.end?.dateTime || startDate);
         }
-      } else {
-        startDate = new Date(item.start?.dateTime || new Date());
-        endDate = new Date(item.end?.dateTime || startDate);
-      }
 
-      // Resolve color: event-level colorId -> calendar backgroundColor
-      let resolvedColor = calendar.backgroundColor;
-      if (item.colorId && GOOGLE_EVENT_COLORS[item.colorId]) {
-        resolvedColor = GOOGLE_EVENT_COLORS[item.colorId];
-      }
+        // Resolve color: event-level colorId -> calendar backgroundColor
+        let resolvedColor = calendar.backgroundColor;
+        if (item.colorId && GOOGLE_EVENT_COLORS[item.colorId]) {
+          resolvedColor = GOOGLE_EVENT_COLORS[item.colorId];
+        }
 
-      // Clean up location field
-      let cleanLocation = item.location?.trim();
-      if (cleanLocation) {
-        // Remove duplicate newlines or extra spaces
-        cleanLocation = cleanLocation.replace(/\s+/g, ' ');
-      }
+        // Clean up location field
+        let cleanLocation = item.location?.trim();
+        if (cleanLocation) {
+          // Remove duplicate newlines or extra spaces
+          cleanLocation = cleanLocation.replace(/\s+/g, ' ');
+        }
 
-      return {
-        id: item.id,
-        calendarId: calendar.id,
-        calendarName: calendar.summary,
-        title: item.summary || '(No Title)',
-        description: item.description,
-        location: cleanLocation,
-        start: startDate,
-        end: endDate,
-        allDay: isAllDay,
-        color: resolvedColor,
-        attendeesCount: item.attendees?.length,
-        htmlLink: item.htmlLink,
-      };
-    });
+        return {
+          id: item.id,
+          calendarId: calendar.id,
+          calendarName: calendar.summary,
+          title: item.summary || '(No Title)',
+          description: item.description,
+          location: cleanLocation,
+          start: startDate,
+          end: endDate,
+          allDay: isAllDay,
+          color: resolvedColor,
+          attendeesCount: item.attendees?.length,
+          htmlLink: item.htmlLink,
+        };
+      })
+      .filter((evt) => evt.end.getTime() >= startOfToday.getTime());
   } catch (error) {
     console.error(`Failed to fetch events for calendar ${calendar.id}:`, error);
     return [];
