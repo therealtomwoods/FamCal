@@ -188,8 +188,18 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     groupedEvents[key].push(event);
   });
 
-  if (!groupedEvents[todayKey]) groupedEvents[todayKey] = [];
-  if (!groupedEvents[tomorrowKey]) groupedEvents[tomorrowKey] = [];
+  // Always ensure the next 7 upcoming days (Today + 6 days) are included so the schedule scrolls through all upcoming days
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(currentTime);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')}`;
+    if (!groupedEvents[k]) {
+      groupedEvents[k] = [];
+    }
+  }
 
   const sortedDateKeys = Object.keys(groupedEvents)
     .filter((k) => k >= todayKey)
@@ -482,7 +492,9 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
           onWheel={handleUserScrollInteraction}
           onTouchStart={handleUserScrollInteraction}
           onTouchMove={handleUserScrollInteraction}
-          className="flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black"
+          className={`flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black ${
+            autoScroll ? 'pb-[30vh]' : ''
+          }`}
         >
           {isLoading ? (
             <div className="flex flex-col items-center justify-center py-16 text-slate-400">
