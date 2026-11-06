@@ -53,13 +53,13 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   const columnScrollRefs = useRef<Array<HTMLDivElement | null>>([]);
   const userInteractionPauseUntilRef = useRef<number>(0);
 
-  // 6-second upward auto-scroll loop (scrolls from top to bottom in 6000ms, reverts to top, and repeats)
+  // Slow, calm auto-scroll loop: pause 5s at top, slowly scroll down to the 4 days at bottom, pause briefly, and revert to top
   useEffect(() => {
     if (!autoScroll || isLoading) return;
 
-    const SCROLL_DURATION_MS = 6000; // 6 seconds to complete scroll from top to bottom
-    const TOP_PAUSE_MS = 1000; // brief pause at top before starting scroll
-    const BOTTOM_PAUSE_MS = 1000; // brief pause at bottom before reverting to top
+    const TOP_PAUSE_MS = 5000; // 5-second pause at the top of the calendar
+    const SCROLL_DURATION_MS = 14000; // slow, gentle 14-second scroll to the bottom of the 4 days
+    const BOTTOM_PAUSE_MS = 3000; // 3-second pause at the bottom before reverting to the top
 
     let rafId: number;
     let cycleStartTime = performance.now();
@@ -96,16 +96,16 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
         if (maxScroll <= 0) return;
 
         if (elapsed < TOP_PAUSE_MS) {
-          // At top waiting to start scroll
+          // Hold at top for 5 seconds before starting slow scroll
           if (el.scrollTop !== 0) {
             el.scrollTop = 0;
           }
         } else if (elapsed < TOP_PAUSE_MS + SCROLL_DURATION_MS) {
-          // Scrolling upwards (increasing scrollTop from 0 to maxScroll over 6 seconds)
+          // Slow, steady scroll down to the bottom of the 4 days
           const progress = (elapsed - TOP_PAUSE_MS) / SCROLL_DURATION_MS;
           el.scrollTop = progress * maxScroll;
         } else {
-          // Hold at bottom briefly before reverting to top on next cycle wrap
+          // Hold at bottom before reverting to top on next cycle wrap
           el.scrollTop = maxScroll;
         }
       });
@@ -118,8 +118,8 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   }, [autoScroll, isLoading, isFourColumnMode, events.length, pageOffset]);
 
   const handleUserScrollInteraction = () => {
-    // Pause auto-scroll for 4 seconds if user manually touches or wheels the calendar
-    userInteractionPauseUntilRef.current = Date.now() + 4000;
+    // Pause auto-scroll for 5 seconds if user manually touches or wheels the calendar
+    userInteractionPauseUntilRef.current = Date.now() + 5000;
   };
 
   useEffect(() => {
@@ -164,6 +164,20 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     '0'
   )}-${String(tomorrow.getDate()).padStart(2, '0')}`;
 
+  // Build the exact 4 days to display on the calendar (Today + next 3 days = 4 days total)
+  const fourDayKeys: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const d = new Date(currentTime);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')}`;
+    fourDayKeys.push(k);
+    groupedEvents[k] = [];
+  }
+  const maxFourDayKey = fourDayKeys[fourDayKeys.length - 1];
+
   events.forEach((event) => {
     // If an event has already ended (all-day) or its start time has passed (timed), do not show it
     const isPast = event.allDay
@@ -182,28 +196,18 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
     // If a multi-day event started before today and is still ongoing today, group it under todayKey (never show yesterday)
     const key = rawKey < todayKey ? todayKey : rawKey;
 
+    // In vertical mode, only include events within the 4-day window (in 4-column mode, allow pagination)
+    if (!isFourColumnMode && key > maxFourDayKey) {
+      return;
+    }
+
     if (!groupedEvents[key]) {
       groupedEvents[key] = [];
     }
     groupedEvents[key].push(event);
   });
 
-  // Always ensure the next 7 upcoming days (Today + 6 days) are included so the schedule scrolls through all upcoming days
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(currentTime);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() + i);
-    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-      d.getDate()
-    ).padStart(2, '0')}`;
-    if (!groupedEvents[k]) {
-      groupedEvents[k] = [];
-    }
-  }
-
-  const sortedDateKeys = Object.keys(groupedEvents)
-    .filter((k) => k >= todayKey)
-    .sort();
+  const sortedDateKeys = fourDayKeys;
 
   const formatHeaderDate = (dateKey: string) => {
     const [year, month, day] = dateKey.split('-').map(Number);
@@ -493,7 +497,7 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
           onTouchStart={handleUserScrollInteraction}
           onTouchMove={handleUserScrollInteraction}
           className={`flex-1 overflow-y-auto px-3 sm:px-4 py-2 space-y-4 bg-black ${
-            autoScroll ? 'pb-[30vh]' : ''
+            autoScroll ? 'pb-8' : ''
           }`}
         >
           {isLoading ? (
