@@ -53,11 +53,11 @@ export const AgendaCalendar: React.FC<AgendaCalendarProps> = ({
   const columnScrollRefs = useRef<Array<HTMLDivElement | null>>([]);
   const userInteractionPauseUntilRef = useRef<number>(0);
 
-  // Slow, calm auto-scroll loop: pause 5s at top, slowly scroll down to the 4 days at bottom, pause briefly, and revert to top
+  // Slow, calm auto-scroll loop: pause 10s at top, slowly scroll down to the 4 days at bottom, pause briefly, and revert to top
   useEffect(() => {
     if (!autoScroll || isLoading) return;
 
-    const TOP_PAUSE_MS = 5000; // 5-second pause at the top of the calendar
+    const TOP_PAUSE_MS = 10000; // 10-second pause at the top of the calendar
     const SCROLL_DURATION_MS = 14000; // slow, gentle 14-second scroll to the bottom of the 4 days
     const BOTTOM_PAUSE_MS = 3000; // 3-second pause at the bottom before reverting to the top
 
